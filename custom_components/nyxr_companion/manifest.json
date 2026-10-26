@@ -1,0 +1,14 @@
+{
+  "domain": "nyxr_companion",
+  "name": "NyxR Companion",
+  "codeowners": [
+    "@pStrikeZ"
+  ],
+  "config_flow": true,
+  "documentation": "https://github.com/pStrikeZ/Nyx-Refrain-Companion",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/pStrikeZ/Nyx-Refrain-Companion/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}

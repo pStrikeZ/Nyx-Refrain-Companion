@@ -1,0 +1,34 @@
+name: NyxR Companion
+version: "0.1.0"
+slug: nyxr_companion
+description: Plays CDs and Bluetooth audio on an AirPlay 2 speaker through nyxr
+url: https://github.com/pStrikeZ/Nyx-Refrain-Companion
+arch:
+  - aarch64
+  - amd64
+init: false
+# AirPlay 2 receivers open connections back to the sender (timing, events).
+host_network: true
+# BlueZ on the host: pairing agent, devices, AVRCP.
+host_dbus: true
+# The host's sound server receives the A2DP stream; we record it.
+audio: true
+devices:
+  - /dev/sr0
+# Supervisor discovery: tells the integration where the API is and its token.
+hassio_api: true
+discovery:
+  - nyxr_companion
+# SET CD SPEED through SG_IO, for drives passed through to a VM as raw SCSI devices.
+privileged:
+  - SYS_RAWIO
+options:
+  cd_device: /dev/sr0
+  bluetooth_adapter: ""
+  api_listen: "127.0.0.1:8765"
+  log_level: info
+schema:
+  cd_device: str
+  bluetooth_adapter: str?
+  api_listen: str
+  log_level: list(debug|info|warning|error)

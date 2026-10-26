@@ -1,0 +1,129 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to NyxR Companion",
+        "description": "Enter the connection details for the NyxR Companion add-on. The token is in /data/api_token of the add-on; it is filled in for you when the add-on is discovered.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "token": "API token"
+        }
+      },
+      "hassio_confirm": {
+        "title": "NyxR Companion",
+        "description": "Set up the NyxR Companion add-on?"
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the NyxR Companion add-on.",
+      "invalid_auth": "The API token is wrong."
+    },
+    "abort": {
+      "already_configured": "Device is already configured",
+      "invalid_auth": "The API token is wrong.",
+      "cannot_connect": "Failed to connect to the NyxR Companion add-on."
+    }
+  },
+  "entity": {
+    "switch": {
+      "stream": {
+        "name": "Stream"
+      },
+      "bluetooth_pairing": {
+        "name": "Bluetooth pairing"
+      },
+      "bluetooth_auto_switch": {
+        "name": "Switch to Bluetooth automatically"
+      }
+    },
+    "select": {
+      "play_mode": {
+        "name": "Play mode",
+        "state": {
+          "repeat_one": "Repeat one",
+          "repeat_all": "Repeat all",
+          "shuffle": "Shuffle"
+        }
+      },
+      "read_mode": {
+        "name": "Read mode",
+        "state": {
+          "raw": "Raw",
+          "raw_aligned": "Raw + alignment",
+          "paranoia_overlap": "cd-paranoia (overlap)",
+          "paranoia_full": "cd-paranoia (full)"
+        }
+      },
+      "latency_profile": {
+        "name": "Latency profile",
+        "state": {
+          "low": "Low",
+          "balanced": "Balanced",
+          "stable": "Stable"
+        }
+      },
+      "source": {
+        "name": "Source",
+        "state": {
+          "cd": "CD",
+          "bluetooth": "Bluetooth"
+        }
+      },
+      "bluetooth_pair": {
+        "name": "Pair with nearby device"
+      },
+      "receiver": {
+        "name": "AirPlay receiver"
+      },
+      "bluetooth_forget": {
+        "name": "Forget paired device"
+      }
+    },
+    "number": {
+      "read_speed": {
+        "name": "Read speed"
+      },
+      "buffer_seconds": {
+        "name": "Read-ahead buffer"
+      },
+      "bluetooth_buffer_ms": {
+        "name": "Bluetooth buffer"
+      }
+    },
+    "text": {
+      "target": {
+        "name": "Target receiver"
+      },
+      "bluetooth_name": {
+        "name": "Bluetooth name"
+      }
+    },
+    "button": {
+      "eject": {
+        "name": "Eject"
+      },
+      "bluetooth_disconnect": {
+        "name": "Disconnect Bluetooth device"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Status",
+        "state": {
+          "missing": "Drive disconnected",
+          "tray_open": "Tray open",
+          "no_disc": "No disc",
+          "not_audio": "Not an audio CD",
+          "not_ready": "Reading disc",
+          "stopped": "Stopped",
+          "playing": "Playing",
+          "paused": "Paused"
+        }
+      },
+      "bluetooth_device": {
+        "name": "Bluetooth device"
+      }
+    }
+  }
+}

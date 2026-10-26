@@ -1,0 +1,129 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接到 NyxR Companion",
+        "description": "输入 NyxR Companion 加载项的连接信息。令牌在加载项的 /data/api_token 里；自动发现加载项时会自动填好。",
+        "data": {
+          "host": "主机",
+          "port": "端口",
+          "token": "API 令牌"
+        }
+      },
+      "hassio_confirm": {
+        "title": "NyxR Companion",
+        "description": "要设置 NyxR Companion 加载项吗？"
+      }
+    },
+    "error": {
+      "cannot_connect": "无法连接 NyxR Companion 加载项。",
+      "invalid_auth": "API 令牌不对。"
+    },
+    "abort": {
+      "already_configured": "设备已配置",
+      "invalid_auth": "API 令牌不对。",
+      "cannot_connect": "无法连接 NyxR Companion 加载项。"
+    }
+  },
+  "entity": {
+    "switch": {
+      "stream": {
+        "name": "推流"
+      },
+      "bluetooth_pairing": {
+        "name": "蓝牙配对"
+      },
+      "bluetooth_auto_switch": {
+        "name": "蓝牙自动切换"
+      }
+    },
+    "select": {
+      "play_mode": {
+        "name": "播放模式",
+        "state": {
+          "repeat_one": "单曲循环",
+          "repeat_all": "全部循环",
+          "shuffle": "随机播放"
+        }
+      },
+      "read_mode": {
+        "name": "读取方式",
+        "state": {
+          "raw": "直读",
+          "raw_aligned": "直读 + 对齐",
+          "paranoia_overlap": "cd-paranoia 校验（overlap）",
+          "paranoia_full": "cd-paranoia 校验（完整）"
+        }
+      },
+      "latency_profile": {
+        "name": "延迟档位",
+        "state": {
+          "low": "低延迟",
+          "balanced": "均衡",
+          "stable": "稳定"
+        }
+      },
+      "source": {
+        "name": "音源",
+        "state": {
+          "cd": "CD",
+          "bluetooth": "蓝牙"
+        }
+      },
+      "bluetooth_pair": {
+        "name": "配对附近的设备"
+      },
+      "receiver": {
+        "name": "AirPlay 接收端"
+      },
+      "bluetooth_forget": {
+        "name": "删除已配对的设备"
+      }
+    },
+    "number": {
+      "read_speed": {
+        "name": "光驱转速"
+      },
+      "buffer_seconds": {
+        "name": "预读缓冲"
+      },
+      "bluetooth_buffer_ms": {
+        "name": "蓝牙缓冲"
+      }
+    },
+    "text": {
+      "target": {
+        "name": "目标接收端"
+      },
+      "bluetooth_name": {
+        "name": "蓝牙名称"
+      }
+    },
+    "button": {
+      "eject": {
+        "name": "弹出"
+      },
+      "bluetooth_disconnect": {
+        "name": "断开蓝牙设备"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "状态",
+        "state": {
+          "missing": "光驱未连接",
+          "tray_open": "托盘已打开",
+          "no_disc": "无光盘",
+          "not_audio": "不是音乐 CD",
+          "not_ready": "读取中",
+          "stopped": "已停止",
+          "playing": "播放中",
+          "paused": "已暂停"
+        }
+      },
+      "bluetooth_device": {
+        "name": "蓝牙设备"
+      }
+    }
+  }
+}

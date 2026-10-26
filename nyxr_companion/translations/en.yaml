@@ -1,0 +1,12 @@
+configuration:
+  cd_device:
+    name: CD drive
+    description: Device of the optical drive, also listed under devices in the add-on configuration.
+  bluetooth_adapter:
+    name: Bluetooth adapter
+    description: Adapter to use as the receiver, e.g. hci1. Empty uses the first one.
+  api_listen:
+    name: API address
+    description: Where the HTTP API listens. It has no authentication, so keep it on 127.0.0.1 unless you need it elsewhere.
+  log_level:
+    name: Log level

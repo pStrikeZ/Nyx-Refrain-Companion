@@ -1,0 +1,71 @@
+"""Constants for the NyxR Companion integration."""
+from __future__ import annotations
+
+from homeassistant.const import CONF_HOST, CONF_PORT  # noqa: F401
+
+DOMAIN = "nyxr_companion"
+
+CONF_TOKEN = "token"
+
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8765
+
+PLAY_MODE_REPEAT_ONE = "repeat_one"
+PLAY_MODE_REPEAT_ALL = "repeat_all"
+PLAY_MODE_SHUFFLE = "shuffle"
+
+PLAY_MODES = [
+    PLAY_MODE_REPEAT_ALL,
+    PLAY_MODE_REPEAT_ONE,
+    PLAY_MODE_SHUFFLE,
+]
+
+SOURCE_CD = "cd"
+SOURCE_BLUETOOTH = "bluetooth"
+
+SOURCES = [
+    SOURCE_CD,
+    SOURCE_BLUETOOTH,
+]
+
+READ_MODE_RAW = "raw"
+READ_MODE_RAW_ALIGNED = "raw_aligned"
+READ_MODE_PARANOIA_OVERLAP = "paranoia_overlap"
+READ_MODE_PARANOIA_FULL = "paranoia_full"
+
+READ_MODES = [
+    READ_MODE_RAW,
+    READ_MODE_RAW_ALIGNED,
+    READ_MODE_PARANOIA_OVERLAP,
+    READ_MODE_PARANOIA_FULL,
+]
+
+LATENCY_PROFILE_LOW = "low"
+LATENCY_PROFILE_BALANCED = "balanced"
+LATENCY_PROFILE_STABLE = "stable"
+
+LATENCY_PROFILES = [
+    LATENCY_PROFILE_LOW,
+    LATENCY_PROFILE_BALANCED,
+    LATENCY_PROFILE_STABLE,
+]
+
+STATUS_MISSING = "missing"
+STATUS_TRAY_OPEN = "tray_open"
+STATUS_NO_DISC = "no_disc"
+STATUS_NOT_AUDIO = "not_audio"
+STATUS_NOT_READY = "not_ready"
+STATUS_STOPPED = "stopped"
+STATUS_PLAYING = "playing"
+STATUS_PAUSED = "paused"
+
+STATUS_OPTIONS = [
+    STATUS_MISSING,
+    STATUS_TRAY_OPEN,
+    STATUS_NO_DISC,
+    STATUS_NOT_AUDIO,
+    STATUS_NOT_READY,
+    STATUS_STOPPED,
+    STATUS_PLAYING,
+    STATUS_PAUSED,
+]
