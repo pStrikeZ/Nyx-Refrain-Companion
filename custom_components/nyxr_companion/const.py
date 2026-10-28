@@ -22,10 +22,12 @@ PLAY_MODES = [
 
 SOURCE_CD = "cd"
 SOURCE_BLUETOOTH = "bluetooth"
+SOURCE_AIRPLAY = "airplay"
 
 SOURCES = [
     SOURCE_CD,
     SOURCE_BLUETOOTH,
+    SOURCE_AIRPLAY,
 ]
 
 READ_MODE_RAW = "raw"

@@ -17,7 +17,11 @@ async def async_setup_entry(
     """Set up NyxR Companion text entities."""
     coordinator = entry.runtime_data
     async_add_entities(
-        [NyxrCompanionTargetText(coordinator), NyxrCompanionBluetoothNameText(coordinator)]
+        [
+            NyxrCompanionTargetText(coordinator),
+            NyxrCompanionBluetoothNameText(coordinator),
+            NyxrCompanionAirPlayNameText(coordinator),
+        ]
     )
 
 
@@ -68,3 +72,11 @@ class NyxrCompanionBluetoothNameText(NyxrCompanionSettingEntity, TextEntity):
     async def async_set_value(self, value: str) -> None:
         """Change the name."""
         await self.async_set_setting(value)
+
+
+class NyxrCompanionAirPlayNameText(NyxrCompanionBluetoothNameText):
+    """Name the AirPlay receiver shows in the AirPlay list."""
+
+    _setting = "airplay_name"
+    _attr_translation_key = "airplay_name"
+    _attr_icon = "mdi:cast-variant"

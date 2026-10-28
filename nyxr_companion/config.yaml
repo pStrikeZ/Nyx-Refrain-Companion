@@ -1,7 +1,7 @@
 name: NyxR Companion
-version: "0.1.0"
+version: "0.2.0"
 slug: nyxr_companion
-description: Plays CDs and Bluetooth audio on an AirPlay 2 speaker through nyxr
+description: Plays CDs, Bluetooth and AirPlay audio on an AirPlay 2 speaker through nyxr
 url: https://github.com/pStrikeZ/Nyx-Refrain-Companion
 arch:
   - aarch64

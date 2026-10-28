@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- AirPlay receiver: iPhones, iPads and Macs can play to NyxR Companion, and it passes their audio on to the speaker, with track info and cover. It switches to AirPlay when a sender starts playing (can be turned off), and its name in the AirPlay list can be changed.
+- The add-on is now built on shairport-sync's official image (Alpine) instead of Debian.
+- CD: the disc stops spinning after a minute without playing; it spins up again on its own (about 3 s).
+
 ## 0.1.0
 
 First release.

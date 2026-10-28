@@ -4,13 +4,13 @@
 
 <h1 align="center">NyxR Companion</h1>
 
-<p align="center">把跑 Home Assistant 的那台机器变成 AirPlay 2 音箱的 CD 机和蓝牙接收器。</p>
+<p align="center">把跑 Home Assistant 的那台机器变成 AirPlay 2 音箱的 CD 机、蓝牙接收器和 AirPlay 中转。</p>
 
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
 
-NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载项播放光驱里的音乐 CD，也接收手机、播放器的蓝牙音频（A2DP），经 Nyx Refrain 的命令行发送端 [nyxr](https://github.com/pStrikeZ/Nyx-Refrain) 推到 HomePod 等 AirPlay 2 音箱；集成在 Home Assistant 里控制这一切，用起来像一台无头 CD 机加蓝牙音箱。
+NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载项播放光驱里的音乐 CD，接收手机、播放器的蓝牙音频（A2DP），也是 iPhone、iPad、Mac 的 AirPlay 接收端；其中任何一路都经 Nyx Refrain 的命令行发送端 [nyxr](https://github.com/pStrikeZ/Nyx-Refrain) 推到 HomePod 等 AirPlay 2 音箱；集成在 Home Assistant 里控制这一切，用起来像一台无头 CD 机加蓝牙音箱。
 
-> 当前版本：0.1.0，nyxr 来自 Nyx Refrain 0.9.5。主要在 Home Assistant OS（amd64，Proxmox 虚拟机）+ HomePod mini 上测过，欢迎反馈其他环境下的情况。
+> 当前版本：0.2.0，nyxr 来自 Nyx Refrain 0.9.5。主要在 Home Assistant OS（amd64，Proxmox 虚拟机）+ HomePod mini 上测过，欢迎反馈其他环境下的情况。
 
 > **LLM Disclaimer**
 >
@@ -23,7 +23,8 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 - **CD 机**：像 CD 机一样直接读扇区，切歌约半秒出声；16 位 44.1 kHz 的音频逐位不变地送到音箱。曲名和封面先查 MusicBrainz，再用 CD-Text。全部循环、单曲循环、随机。
 - **蓝牙接收器**：手机、播放器像配对音箱一样配对（不需要配对码）；设备一开始播放就自动切到蓝牙。曲目信息和播放 / 暂停 / 切歌走 AVRCP。
 - **由接收端发起配对**：自己发起配对总是失败的设备（发射功率弱的老 iPod）可以从附近设备列表里选出来配对。
-- **同一时间只推一路**：音源选择器在 CD 和蓝牙之间切换，CD 记住播放位置。
+- **AirPlay 中转**：出现在 iPhone、iPad、Mac 的 AirPlay 列表里，把它们播放的内容连同曲目信息和封面转推到音箱；发送端一开始播放就自动切到 AirPlay。用 HomePod 的话，还能避开 tvOS 27 上它自己播放 Apple Music 时不时停住的 bug（见 [AirPlay](#airplay)）。
+- **同一时间只推一路**：音源选择器在 CD、蓝牙和 AirPlay 之间切换，CD 记住播放位置。
 - **音箱上的控制**：在 HomePod 或它的 Home Assistant 卡片上播放 / 暂停 / 切歌，会转给 CD 机或蓝牙设备。
 - **不动音箱的音量**：推流开始时保持音箱当前的音量。
 - **自动设置**：加载项带着 API 令牌向 Home Assistant 报告自己，并列出网络上找到的 AirPlay 接收端。
@@ -42,14 +43,14 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 3. **设置**：**设置 → 设备与服务 → 已发现** 里会出现 NyxR Companion，点 **添加**。地址和令牌由加载项自动填好。
 4. **选择音箱**：在设备的「配置」里用 **AirPlay 接收端** 选（网络上找到的接收端），或者在 **目标接收端** 里填 `IP` / `IP:PORT`。
 
-放入 CD 后打开 **推流**；或者打开 **蓝牙配对**，用手机配对「NyxR Companion」。
+放入 CD 后打开 **推流**；打开 **蓝牙配对**，用手机配对「NyxR Companion」；或者在 iPhone 的 AirPlay 列表里选「NyxR Companion」。
 
 ## 实体
 
 | 实体 | 作用 |
 |---|---|
 | 推流（开关） | 连接音箱并播放所选音源；关闭时停止，并记住 CD 的位置 |
-| 音源（选择） | `cd` 或 `bluetooth`，同一时间只推一路 |
+| 音源（选择） | `cd`、`bluetooth` 或 `airplay`，同一时间只推一路 |
 | 播放模式（选择） | 全部循环、单曲循环、随机（CD） |
 | 弹出（按钮） | 停止并弹出光盘 |
 | 状态（传感器） | 光驱和播放状态；属性里有光盘、曲目和错误信息 |
@@ -58,8 +59,9 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 | 蓝牙设备（传感器） | 当前连着的设备；属性里有已配对设备、编码、采样率和曲目 |
 | 断开蓝牙设备（按钮） | 断开当前设备，配对保留 |
 | 删除已配对的设备（选择） | 删除所选设备的配对 |
+| AirPlay 发送端（传感器） | 当前连着的 AirPlay 发送端；属性里有它在放的曲目 |
 
-配置类实体：AirPlay 接收端、目标接收端、延迟档位（端到端 `low` ≈ 100 ms / `balanced` ≈ 140 ms / `stable` ≈ 240 ms）、读取方式、光驱转速、预读缓冲、蓝牙名称、蓝牙自动切换、蓝牙缓冲。
+配置类实体：AirPlay 接收端、目标接收端、延迟档位（端到端 `low` ≈ 100 ms / `balanced` ≈ 140 ms / `stable` ≈ 240 ms）、读取方式、光驱转速、预读缓冲、蓝牙名称、蓝牙自动切换、蓝牙缓冲、AirPlay 名称、AirPlay 自动切换。
 
 播放、暂停、切歌没有单独的实体：用音箱的媒体播放器，它的控制会转给 NyxR Companion。
 
@@ -70,6 +72,14 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 - **音量**：手机的音量和音箱的音量是叠加的。会把音量告诉接收端的手机（大多数安卓手机）由接收端按它压低音频；其他设备自己先压低。把手机音量开大，在音箱上调音量。
 - **设备那边删掉了配对**：Home Assistant OS 会拒绝它仍然认识的设备重新配对。打开 **蓝牙配对**，从设备上配对：第一次会失败，加载项看到设备连上又没解析出服务就断开，于是删掉旧的配对，第二次就能成功。
 - 距离：蓝牙音频要信号好。用 USB 延长线把适配器从金属机箱里拉出来效果明显。
+
+## AirPlay
+
+- **整体关系**：加载项运行 [shairport-sync](https://github.com/mikebrady/shairport-sync)（加载项就以它的官方镜像为底），带着自己的 mDNS 广播（avahi）和 PTP 时钟（nqptp）。发送端推来的是 buffered AirPlay 2，解码后像 CD 一样经 nyxr 以 realtime 流推到音箱。发送端开始播放时连接音箱，停止或断开 10 秒后结束推流。
+- **为什么 HomePod 用得上**：从 tvOS 27 起，HomePod 自己播放 Apple Music 时会不时在切歌前后停住，播放队列也丢了（它的音频守护进程 `audiomxd` 死锁后自动重启）。改成从 iPhone 推给 NyxR Companion，音乐就以一条不间断的 realtime 流到达 HomePod，至今没被这个问题打断过。
+- **音质**：iPhone 推给非 Apple 的接收端用的是 AAC，所以经加载项的 AirPlay 不是无损。
+- **音量和控制**：手机的音量条被忽略（满幅转推），音量在音箱上调。buffered AirPlay 2 没有从接收端控制发送端的通道，暂停和切歌要在手机上操作；AirPlay 音源下音箱自己的控制不起作用。
+- **网络**：加载项以 `nyxr-companion.local` 的名字在 Home Assistant 自己的 mDNS 旁边应答，nqptp 要用 UDP 319 和 320 端口：同一台主机上不能再跑另一个 AirPlay 2 接收端（比如另一个 shairport-sync）。
 
 ## CD
 
@@ -91,6 +101,7 @@ args: -device virtio-scsi-pci,id=cdscsi -blockdev driver=host_device,filename=/d
 
 - 每次推流只连一个 AirPlay 接收端，不支持多房间。
 - 蓝牙：SBC（以及宿主机声音服务支持的其他编码）；不能拖动进度；只有提供曲目信息的播放器才有 AVRCP 曲名。
+- AirPlay：iPhone 发来的是 AAC；不能从音箱控制发送端；AirPlay 自身的延迟（约 2 秒）叠加在推流延迟之上。
 - HTTP API（见 [API.zh-cn.md](API.zh-cn.md)）只监听 `127.0.0.1`、需要令牌，是给集成用的。
 
 ## 开发
@@ -99,7 +110,7 @@ args: -device virtio-scsi-pci,id=cdscsi -blockdev driver=host_device,filename=/d
 python3 -m unittest discover -s tests
 ```
 
-测试让集成连一个假的加载项（`tests/fake_server.py`，按 [API.zh-cn.md](API.zh-cn.md) 实现），Home Assistant 的模块用替身代替。想试加载项的改动：把 `nyxr_companion/` 拷到宿主机的 `/mnt/data/supervisor/apps/local/`，刷新应用商店后安装；镜像里的 nyxr 取自 Nyx Refrain 的 Release（Dockerfile 里的 `NYXR_VERSION`）。改了 `config.yaml` 里的权限要提高 `version`：Supervisor 只在更新时应用新权限。
+测试让集成连一个假的加载项（`tests/fake_server.py`，按 [API.zh-cn.md](API.zh-cn.md) 实现），Home Assistant 的模块用替身代替；`tests/test_airplay.py` 用假的 shairport-sync 和 nyxr 跑加载项的 AirPlay 音源（需要 `aiohttp` 和 `dbus-next`）。想试加载项的改动：把 `nyxr_companion/` 拷到宿主机的 `/mnt/data/supervisor/apps/local/`，刷新应用商店后安装；镜像里的 nyxr 取自 Nyx Refrain 的 Release（Dockerfile 里的 `NYXR_VERSION`）。改了 `config.yaml` 里的权限要提高 `version`：Supervisor 只在更新时应用新权限。
 
 ---
 

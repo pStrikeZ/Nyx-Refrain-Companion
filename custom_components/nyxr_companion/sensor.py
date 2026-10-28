@@ -9,7 +9,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import STATUS_OPTIONS
 from .coordinator import NyxrCompanionConfigEntry, NyxrCompanionCoordinator
-from .entity import NyxrCompanionBluetoothEntity, NyxrCompanionEntity
+from .entity import (
+    NyxrCompanionAirPlayEntity,
+    NyxrCompanionBluetoothEntity,
+    NyxrCompanionEntity,
+)
 
 
 async def async_setup_entry(
@@ -19,7 +23,13 @@ async def async_setup_entry(
 ) -> None:
     """Set up NyxR Companion sensor entities."""
     coordinator = entry.runtime_data
-    async_add_entities([NyxrCompanionStatusSensor(coordinator), NyxrCompanionBluetoothSensor(coordinator)])
+    async_add_entities(
+        [
+            NyxrCompanionStatusSensor(coordinator),
+            NyxrCompanionBluetoothSensor(coordinator),
+            NyxrCompanionAirPlaySensor(coordinator),
+        ]
+    )
 
 
 class NyxrCompanionStatusSensor(NyxrCompanionEntity, SensorEntity):
@@ -145,4 +155,36 @@ class NyxrCompanionBluetoothSensor(NyxrCompanionBluetoothEntity, SensorEntity):
             "track_artist": track.get("artist"),
             "paired_devices": [d.get("name") for d in devices if isinstance(d, dict)],
             "error": bt.get("error"),
+        }
+
+
+class NyxrCompanionAirPlaySensor(NyxrCompanionAirPlayEntity, SensorEntity):
+    """Sender connected to the AirPlay receiver, with what it plays as attributes."""
+
+    _attr_translation_key = "airplay_sender"
+    _attr_icon = "mdi:cast-variant"
+
+    def __init__(self, coordinator: NyxrCompanionCoordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, "airplay_sender")
+
+    @property
+    def native_value(self) -> str | None:
+        """Return the connected sender's name, or None."""
+        connected = self.airplay.get("connected")
+        return str(connected) if connected else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the receiver's state and the sender's track."""
+        airplay = self.airplay
+        track = airplay.get("track") if isinstance(airplay.get("track"), dict) else {}
+        return {
+            "name": airplay.get("name"),
+            "playing": airplay.get("playing"),
+            "streaming": airplay.get("streaming"),
+            "track_title": track.get("title"),
+            "track_artist": track.get("artist"),
+            "track_album": track.get("album"),
+            "error": airplay.get("error"),
         }

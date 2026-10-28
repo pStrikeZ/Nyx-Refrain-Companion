@@ -35,6 +35,9 @@
       },
       "bluetooth_auto_switch": {
         "name": "Switch to Bluetooth automatically"
+      },
+      "airplay_auto_switch": {
+        "name": "Switch to AirPlay automatically"
       }
     },
     "select": {
@@ -67,7 +70,8 @@
         "name": "Source",
         "state": {
           "cd": "CD",
-          "bluetooth": "Bluetooth"
+          "bluetooth": "Bluetooth",
+          "airplay": "AirPlay"
         }
       },
       "bluetooth_pair": {
@@ -97,6 +101,9 @@
       },
       "bluetooth_name": {
         "name": "Bluetooth name"
+      },
+      "airplay_name": {
+        "name": "AirPlay name"
       }
     },
     "button": {
@@ -123,6 +130,9 @@
       },
       "bluetooth_device": {
         "name": "Bluetooth device"
+      },
+      "airplay_sender": {
+        "name": "AirPlay sender"
       }
     }
   }

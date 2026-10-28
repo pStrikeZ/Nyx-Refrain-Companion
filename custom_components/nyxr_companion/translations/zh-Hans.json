@@ -35,6 +35,9 @@
       },
       "bluetooth_auto_switch": {
         "name": "蓝牙自动切换"
+      },
+      "airplay_auto_switch": {
+        "name": "AirPlay 自动切换"
       }
     },
     "select": {
@@ -67,7 +70,8 @@
         "name": "音源",
         "state": {
           "cd": "CD",
-          "bluetooth": "蓝牙"
+          "bluetooth": "蓝牙",
+          "airplay": "AirPlay"
         }
       },
       "bluetooth_pair": {
@@ -97,6 +101,9 @@
       },
       "bluetooth_name": {
         "name": "蓝牙名称"
+      },
+      "airplay_name": {
+        "name": "AirPlay 名称"
       }
     },
     "button": {
@@ -123,6 +130,9 @@
       },
       "bluetooth_device": {
         "name": "蓝牙设备"
+      },
+      "airplay_sender": {
+        "name": "AirPlay 发送端"
       }
     }
   }

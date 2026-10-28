@@ -48,6 +48,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "bluetooth_name": "NyxR Companion",
     "bluetooth_auto_switch": True,
     "bluetooth_buffer_ms": 150,
+    "airplay_name": "NyxR Companion",
+    "airplay_auto_switch": True,
 }
 
 DEFAULT_BLUETOOTH: dict[str, Any] = {
@@ -64,6 +66,18 @@ DEFAULT_BLUETOOTH: dict[str, Any] = {
     "streaming": False,
     "playback": "stopped",
     "track": None,
+    "error": None,
+}
+
+DEFAULT_AIRPLAY: dict[str, Any] = {
+    "available": True,
+    "name": "NyxR Companion",
+    "connected": "iPhone",
+    "playing": True,
+    "streaming": False,
+    "playback": "playing",
+    "track": {"number": 1, "title": "Ref:rain", "artist": "Limonène", "album": "maimai",
+              "length": 215.0, "cover_url": None},
     "error": None,
 }
 
@@ -85,6 +99,7 @@ DEFAULT_STATE: dict[str, Any] = {
     "mode": "repeat_all",
     "error": None,
     "bluetooth": copy.deepcopy(DEFAULT_BLUETOOTH),
+    "airplay": copy.deepcopy(DEFAULT_AIRPLAY),
     "receivers": copy.deepcopy(DEFAULT_RECEIVERS),
     "settings": copy.deepcopy(DEFAULT_SETTINGS),
 }
@@ -337,16 +352,16 @@ async def handle_post_settings(request: web.Request) -> web.Response:
                     {"error": f"Invalid target: {value}"}, status=400
                 )
             updates[name] = value.strip()
-        elif name == "bluetooth_name":
+        elif name in ("bluetooth_name", "airplay_name"):
             if not isinstance(value, str) or not value.strip() or len(value.strip()) > 64:
                 return web.json_response(
-                    {"error": f"Invalid bluetooth_name: {value}"}, status=400
+                    {"error": f"Invalid {name}: {value}"}, status=400
                 )
             updates[name] = value.strip()
-        elif name == "bluetooth_auto_switch":
+        elif name in ("bluetooth_auto_switch", "airplay_auto_switch"):
             if not isinstance(value, bool):
                 return web.json_response(
-                    {"error": f"Invalid bluetooth_auto_switch: {value}"}, status=400
+                    {"error": f"Invalid {name}: {value}"}, status=400
                 )
             updates[name] = value
         elif name == "bluetooth_buffer_ms":
@@ -377,9 +392,9 @@ async def handle_post_source(request: web.Request) -> web.Response:
     except Exception:
         return web.json_response({"error": "Invalid JSON"}, status=400)
     source = data.get("source") if isinstance(data, dict) else None
-    if source not in ("cd", "bluetooth"):
+    if source not in ("cd", "bluetooth", "airplay"):
         return web.json_response(
-            {"error": "source must be one of cd, bluetooth"}, status=400
+            {"error": "source must be one of cd, bluetooth, airplay"}, status=400
         )
     if source != server.state.get("source"):
         server.state["source"] = source

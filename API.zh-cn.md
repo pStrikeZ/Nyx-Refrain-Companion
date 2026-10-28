@@ -45,6 +45,16 @@
     "track": {"number": 1, "title": "曲名", "artist": "艺人", "album": "专辑", "length": 223.4},
     "error": null
   },
+  "airplay": {
+    "available": true,
+    "name": "NyxR Companion",
+    "connected": "iPhone",
+    "playing": false,
+    "streaming": false,
+    "playback": "paused",
+    "track": {"number": 1, "title": "曲名", "artist": "艺人", "album": "专辑", "length": 215.0, "cover_url": "file:///run/nyxr-companion/airplay-cover-1.jpg"},
+    "error": null
+  },
   "receivers": [
     {"name": "Living Room", "address": "192.0.2.10:7000", "model": "AudioAccessory5,1"}
   ],
@@ -56,14 +66,16 @@
     "target": "192.0.2.10:7000",
     "bluetooth_name": "NyxR Companion",
     "bluetooth_auto_switch": true,
-    "bluetooth_buffer_ms": 150
+    "bluetooth_buffer_ms": 150,
+    "airplay_name": "NyxR Companion",
+    "airplay_auto_switch": true
   }
 }
 ```
 
 | 字段 | 取值 |
 |---|---|
-| `source` | 推哪一路：`cd`（默认）或 `bluetooth`。同一时间只推一路；`streaming`、`playback`、`error` 都是所选这一路的 |
+| `source` | 推哪一路：`cd`（默认）、`bluetooth` 或 `airplay`。同一时间只推一路；`streaming`、`playback`、`error` 都是所选这一路的 |
 | `drive` | `ok`（有碟）、`no_disc`、`tray_open`、`not_ready`（读盘中）、`not_audio`（没有音轨：数据盘、DVD，或目录连续 3 次读不出；拒绝播放）、`missing`（光驱不在，如 USB 掉线） |
 | `disc` | 只在 `drive == "ok"` 且 TOC 已读出时非 `null`。只含音轨：混合模式盘、CD-Extra 的数据轨不列出、不播放，`number` 从 1 连续编号。元数据先取 MusicBrainz，查不到用光盘的 CD-Text（没有封面），都没有时 `album` / `artist` / `cover_url` 为 `null`，曲名为 `Track01`、`Track02`… |
 | `streaming` | nyxr 是否正连着接收端 |
@@ -74,6 +86,7 @@
 | `error` | 最近一次错误的说明字符串，没有则 `null` |
 | `receivers` | 网络上找到的 AirPlay 接收端（`nyxr discover`，启动时和之后每 5 分钟找一次）：`{"name", "address", "model"}`，`model` 不知道时为 `null` |
 | `bluetooth` | 蓝牙接收端，见下文。宿主机没有可用的 D-Bus、BlueZ 或适配器时 `available` 为 `false` |
+| `airplay` | AirPlay 接收端，见下文。shairport-sync 启动不了时 `available` 为 `false` |
 | `settings` | 可调设置，见下表 |
 
 ### 设置
@@ -90,6 +103,8 @@
 | `bluetooth_name` | 1–64 个字符，手机上看到的蓝牙名称，默认 `NyxR Companion` | 立即 |
 | `bluetooth_auto_switch` | `true`（默认）/ `false`：已连接的设备开始播放时自动切到蓝牙并推流 | 立即 |
 | `bluetooth_buffer_ms` | 20–2000 的整数，蓝牙音频的抖动缓冲（毫秒），默认 150 | 下次打开蓝牙推流 |
+| `airplay_name` | 1–64 个字符，AirPlay 列表里显示的名称，默认 `NyxR Companion` | 立即：接收端用新名称重启，已连接的发送端会断开 |
+| `airplay_auto_switch` | `true`（默认）/ `false`：发送端开始播放时自动切到 AirPlay 并推流 | 立即 |
 
 ### 蓝牙
 
@@ -105,6 +120,18 @@
 | `streaming` | 蓝牙这一路的 nyxr 是否连着接收端 |
 | `playback` | 设备的 AVRCP 播放状态；设备不报时按是否在发音频推断 |
 | `track` | AVRCP 曲目信息；设备不报曲名时 `title` 是设备名 |
+
+### AirPlay
+
+AirPlay 2 接收端（shairport-sync），iPhone、iPad、Mac 可以往这里推；收到的音频像 CD 一样经 nyxr 推到音箱。
+
+| 字段 | 取值 |
+|---|---|
+| `connected` | 当前连着的发送端名称，没有则 `null` |
+| `playing` | 发送端正在发送音频 |
+| `streaming` | AirPlay 这一路的 nyxr 是否连着接收端 |
+| `playback` | 有音频时 `playing`；发送端连着（或推流开着）但没有音频时 `paused`；否则 `stopped` |
+| `track` | 发送端给的曲目信息和封面；没有曲名时 `title` 是发送端名称。`cover_url` 是加载项里的文件，给 nyxr 用 |
 
 ## 端点
 
@@ -127,6 +154,6 @@
 | POST | `/api/bluetooth/disconnect` | `{}` | 断开当前连着的设备（配对保留） |
 | POST | `/api/bluetooth/forget` | `{"address": "AA:BB:CC:DD:EE:FF"}` | 删除与该设备的配对；不带 `address` 时删除 `devices` 里的全部。地址不在 `devices` 里返回 400。设备那边删掉配对的情况不需要它：配对窗口打开期间，已配对设备连上后 10 秒内没解析出服务就断开，守护进程会自动删掉旧配对，之后就能重新配对 |
 
-`/api/stream`、`/api/play`、`/api/pause`、`/api/next`、`/api/previous` 作用于当前音源。音源是蓝牙时：打开推流需要有设备连着（否则 409），播放 / 暂停 / 切歌经 AVRCP 转给设备，`track` 参数被忽略。蓝牙不可用时 `/api/bluetooth/*` 返回 409。
+`/api/stream`、`/api/play`、`/api/pause`、`/api/next`、`/api/previous` 作用于当前音源。音源是蓝牙时：打开推流需要有设备连着（否则 409），播放 / 暂停 / 切歌经 AVRCP 转给设备，`track` 参数被忽略。蓝牙不可用时 `/api/bluetooth/*` 返回 409。音源是 AirPlay 时：打开推流需要有发送端连着（否则 409），发送端停止或断开 10 秒后推流结束；buffered AirPlay 2 没有从接收端控制发送端的通道，所以暂停 / 切歌不起作用，要在发送端上操作。
 
 POST 成功返回 `200` 和最新状态对象；参数错误返回 `400`，当前状态不允许（如没有碟）返回 `409`，令牌不对返回 `401`，都返回 `{"error": "说明"}`。

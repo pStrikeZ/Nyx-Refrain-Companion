@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """NyxR Companion: plays an audio CD from a local drive through nyxr to an AirPlay 2
-receiver, and works as a Bluetooth receiver (A2DP sink) through the host's BlueZ.
+receiver, and works as a Bluetooth receiver (A2DP sink) through the host's BlueZ and as
+an AirPlay 2 receiver through shairport-sync.
 
     CD drive ──libcdio──▶ ring buffer ──PCM──▶ nyxr --source stdin ──AirPlay 2──▶ speaker
     phone ──A2DP──▶ BlueZ + PulseAudio ──parec──▶ nyxr --source stdin --input-live ──▶ speaker
+    iPhone ──AirPlay 2 (buffered)──▶ shairport-sync ──PCM──▶ nyxr --input-live ──▶ speaker
+
+The AirPlay path also works around a HomePod bug: on tvOS 27 its own Apple Music playback
+deadlocks audiomxd now and then, while nyxr's realtime stream has never been cut by it.
 
 Control surfaces:
 - MPRIS on a private D-Bus session bus. nyxr --now-playing reads track info from it and
@@ -17,6 +22,7 @@ nyxr (which pulls at the receiver's pace), writing silence while paused or starv
 """
 
 import asyncio
+import base64
 import collections
 import ctypes
 import fcntl
@@ -52,6 +58,7 @@ PIPE_SIZE = 16384  # small pipe so a pause takes effect quickly
 MODES = ("repeat_all", "repeat_one", "shuffle")
 
 # linux/cdrom.h
+CDROMSTOP = 0x5307
 CDROMEJECT = 0x5309
 CDROM_SELECT_SPEED = 0x5322
 SG_IO = 0x2285  # scsi/sg.h
@@ -177,6 +184,8 @@ SETTINGS_SPEC = {
     "bluetooth_name": (_name, "NyxR Companion"),
     "bluetooth_auto_switch": (_bool, True),
     "bluetooth_buffer_ms": (_number(20, 2000, int), 150),
+    "airplay_name": (_name, "NyxR Companion"),
+    "airplay_auto_switch": (_bool, True),
 }
 for _name, _var, _default in (
     ("read_speed", "NYXR_COMPANION_READ_SPEED", 4),
@@ -289,6 +298,10 @@ def discover_receivers():
         m = DISCOVERED.match(line.strip())
         if not m:
             continue
+        if m["name"] == SETTINGS["airplay_name"] or "._tcp.local" in m["name"]:
+            # Ourselves (streaming there would loop), or another service's record that came
+            # along in an mDNS answer.
+            continue
         entry = found.setdefault(m["address"], {"name": m["name"], "address": m["address"], "model": None})
         if m["model"] not in ("", "Unknown"):
             entry["model"] = m["model"]
@@ -387,6 +400,19 @@ def eject_disc():
         os.close(fd)
 
 
+def spin_down():
+    """Stops the disc spinning (STOP UNIT). The drive's own standby timer never runs out:
+    the status polling keeps it idle, still spinning, for as long as a disc is in. The next
+    read spins it up again by itself (about 3 seconds)."""
+    if FAKE_DISC:
+        return
+    fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        fcntl.ioctl(fd, CDROMSTOP)
+    finally:
+        os.close(fd)
+
+
 class NotAudio(Exception):
     """The disc has no audio tracks: a data CD, a DVD, or one whose TOC cannot be read."""
 
@@ -444,14 +470,38 @@ def read_toc():
     audio = audio_tracks()
     if not audio:
         raise NotAudio()
-    import libdiscid
-
-    disc = libdiscid.read(DEVICE)
-    numbers = range(disc.first_track, disc.last_track + 1)
-    tracks = [(n, length) for n, length in zip(numbers, disc.track_lengths) if n in audio]
+    disc_id, first, lengths = _read_discid()
+    numbers = range(first, first + len(lengths))
+    tracks = [(n, length) for n, length in zip(numbers, lengths) if n in audio]
     if not tracks:
         raise NotAudio()
-    return disc.id, [length for _, length in tracks], [n for n, _ in tracks]
+    return disc_id, [length for _, length in tracks], [n for n, _ in tracks]
+
+
+def _read_discid():
+    """MusicBrainz disc ID, first track number and track lengths (sectors), through
+    libdiscid directly."""
+    lib = ctypes.CDLL("libdiscid.so.0")
+    lib.discid_new.restype = ctypes.c_void_p
+    lib.discid_free.argtypes = [ctypes.c_void_p]
+    lib.discid_read_sparse.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint]
+    lib.discid_get_error_msg.argtypes = [ctypes.c_void_p]
+    lib.discid_get_error_msg.restype = ctypes.c_char_p
+    lib.discid_get_id.argtypes = [ctypes.c_void_p]
+    lib.discid_get_id.restype = ctypes.c_char_p
+    for fn in ("discid_get_first_track_num", "discid_get_last_track_num"):
+        getattr(lib, fn).argtypes = [ctypes.c_void_p]
+    lib.discid_get_track_length.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    disc = lib.discid_new()
+    try:
+        if not lib.discid_read_sparse(disc, DEVICE.encode(), 0):  # TOC only
+            raise OSError(lib.discid_get_error_msg(disc).decode("utf-8", "replace"))
+        first = lib.discid_get_first_track_num(disc)
+        last = lib.discid_get_last_track_num(disc)
+        lengths = [lib.discid_get_track_length(disc, n) for n in range(first, last + 1)]
+        return lib.discid_get_id(disc).decode(), first, lengths
+    finally:
+        lib.discid_free(disc)
 
 
 CDTEXT_TITLE, CDTEXT_PERFORMER = 0, 1  # cdtext_field_t
@@ -768,6 +818,7 @@ class Player:
         self.buffered = 0
         self.seq = 0  # last sequence number handed out
         self.failed_tracks = 0  # read failures in a row
+        self.last_read = time.monotonic()  # when the drive was last read; see monitor_drive
         self.disc_epoch = 0  # bumped when the disc goes away, so the reader reopens the drive
         self.playing_seq = 0  # sequence number of what the writer is playing
         self.gen = 0  # bumped to cancel the reader's current job
@@ -779,6 +830,7 @@ class Player:
 
         self.source = "cd"  # or "bluetooth"; see Sources
         self.bt = None  # Bluetooth, set up by main()
+        self.airplay = None  # AirPlay, set up by main()
         self.sources = None
 
         threading.Thread(target=self._reader_loop, daemon=True).start()
@@ -800,20 +852,22 @@ class Player:
 
     def snapshot(self):
         bt = self.bt.snapshot() if self.bt else {"available": False}
+        airplay = self.airplay.snapshot() if self.airplay else {"available": False}
         with self.lock:
-            on_bt = self.source == "bluetooth"
+            other = {"bluetooth": bt, "airplay": airplay}.get(self.source)
             return {
                 "source": self.source,
                 "drive": self.drive,
                 "disc": self.disc,
                 # The selected source's stream and playback.
-                "streaming": bt["streaming"] if on_bt else self.streaming,
-                "playback": bt["playback"] if on_bt else self.playback,
+                "streaming": other["streaming"] if other else self.streaming,
+                "playback": other["playback"] if other else self.playback,
                 "track": self.track,
                 "position": round(self.position(), 1),
                 "mode": self.mode,
-                "error": bt["error"] if on_bt else self.error,
+                "error": other["error"] if other else self.error,
                 "bluetooth": bt,
+                "airplay": airplay,
                 "receivers": self.receivers,
                 "settings": dict(SETTINGS.values),
             }
@@ -1038,6 +1092,8 @@ class Player:
             limit_speed()
         if "bluetooth_name" in changed and self.bt:
             self.bt._sync(self.bt.apply_name())
+        if "airplay_name" in changed and self.airplay:
+            self.airplay.apply_name()
         with self.lock:
             if "read_mode" in changed and self.track is not None and (
                 self.job is not None or self.reading is not None or self.buffer
@@ -1204,6 +1260,7 @@ class Player:
                         break
                     self.buffer.append((seq, track, data))
                     self.buffered += len(data)
+                    self.last_read = time.monotonic()
                     self.lock.notify_all()
             if cancelled:
                 reader.kill()
@@ -1298,7 +1355,7 @@ A2DP_SOURCE_UUID = "0000110a-0000-1000-8000-00805f9b34fb"
 # lost our pairing on its side: bluetoothd turns down its new pairing silently (Home Assistant
 # OS keeps JustWorksRepairing = never), and the phone gives up after a few seconds.
 STALE_PAIRING_SECONDS = 10
-SOURCES = ("cd", "bluetooth")
+SOURCES = ("cd", "bluetooth", "airplay")
 REJECTED = "org.bluez.Error.Rejected"
 # Device properties that change with every advertisement; Home Assistant's BLE scanning on
 # the same adapter makes many of these a second, and none of them matter here.
@@ -2007,18 +2064,513 @@ class Bluetooth:
         pass  # AVRCP has no absolute seek
 
 
+# ---------------------------------------------------------------------------------------
+# AirPlay receiver
+
+AIRPLAY_RATE = 44100
+AIRPLAY_FRAME_BYTES = 4  # s16le stereo
+AIRPLAY_BUFFER_MS = 150  # nyxr --input-buffer-ms; shairport-sync's output is steady
+AIRPLAY_GAP_FILL = 0.1  # seconds without PCM (sender paused) before silence is sent
+AIRPLAY_PLAYING_GRACE = 1.0  # seconds since the last PCM that still count as playing
+# Seconds shairport-sync stays "active" after play stops; then the stream to the receiver ends.
+AIRPLAY_ACTIVE_TIMEOUT = 10
+# avahi's own host name: HAOS already answers mDNS for the host's name.
+AIRPLAY_HOST_NAME = "nyxr-companion"
+AIRPLAY_RESTART_DELAYS = (1, 2, 5, 10, 30)
+METADATA_ITEM = re.compile(
+    rb"<item><type>([0-9a-f]{8})</type><code>([0-9a-f]{8})</code><length>(\d+)</length>"
+    rb"(?:\s*<data encoding=\"base64\">([^<]*)</data>)?\s*</item>"
+)
+
+
+def _default_route_interfaces():
+    """Network interfaces with a default route (the LAN), from /proc/net/route."""
+    names = []
+    try:
+        with open("/proc/net/route", encoding="ascii") as f:
+            for line in f.readlines()[1:]:
+                fields = line.split()
+                if len(fields) > 1 and fields[1] == "00000000" and fields[0] not in names:
+                    names.append(fields[0])
+    except OSError:
+        pass
+    return names
+
+
+# "Record [...]" lines are the long ones avahi cuts short: answers too big for a legacy query.
+AVAHI_NOISE = ("not fitting in legacy unicast packet", "Record [", "Registering new address record",
+               "Joining mDNS multicast group", "New relevant interface", "Withdrawing address record",
+               "Leaving mDNS multicast group", "Interface ")
+
+
+def _log_avahi(stdout):
+    """avahi's log, without the chatter (each query from `nyxr discover` makes a few lines)."""
+    for line in stdout:
+        text = line.decode("utf-8", "replace").rstrip()
+        if text:
+            noise = any(n in text for n in AVAHI_NOISE)
+            log.log(logging.DEBUG if noise else logging.INFO, "avahi: %s", text)
+    stdout.close()
+
+
+def _libconfig_string(value):
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+class AirPlay:
+    """AirPlay 2 receiver: shairport-sync (with avahi and nqptp) takes what an iPhone sends,
+    and its decoded PCM goes to nyxr. Buffered AirPlay 2 gives the receiver no way back to
+    the sender, so play / pause / next stay on the phone.
+
+    Stream commands run on executor threads, like Bluetooth's.
+    """
+
+    mode = None  # no play modes; see Player.mode
+
+    def __init__(self, loop, player):
+        self.loop = loop
+        self.player = player
+        self.lock = threading.Lock()
+        self.available = False
+        self.bus_address = None  # the private bus avahi and shairport-sync talk over
+        self.shairport = None
+        self.active = False  # a sender is connected (shairport-sync's active state)
+        self.sender = None  # its name, e.g. "iPhone"
+        self.track = {}  # title, artist, album, length
+        self.pending_track = {}  # metadata of the bundle being received
+        self.track_seq = 0
+        self.cover = None  # file:// URL of the current cover
+        self.cover_seq = 0
+        self.progress = None  # (seconds in, length, monotonic time it was read)
+        self.last_pcm = 0.0
+        self.playing = False
+        self.streaming = False
+        self.error = None
+        self.nyxr = None
+        self.owed = b""  # rest of a frame nyxr has partly received
+        self.last_written = 0.0
+
+    # -- state --------------------------------------------------------------------------
+
+    @property
+    def playback(self):
+        if self.active and self.playing:
+            return "playing"
+        return "paused" if self.active or self.streaming else "stopped"
+
+    def position(self):
+        if self.progress is None:
+            return 0
+        seconds, _, at = self.progress
+        return seconds + (time.monotonic() - at if self.playing else 0)
+
+    def track_info(self):
+        if not self.active:
+            return None
+        track = self.track
+        return {
+            "number": 1,
+            # Without track info the receiver at least shows who is playing.
+            "title": track.get("title") or self.sender or "AirPlay",
+            "artist": track.get("artist"),
+            "album": track.get("album"),
+            "length": track.get("length") or (self.progress[1] if self.progress else None),
+            "cover_url": self.cover,
+        }
+
+    def snapshot(self):
+        return {
+            "available": self.available,
+            "name": SETTINGS["airplay_name"],
+            "connected": (self.sender or "AirPlay") if self.active else None,
+            "playing": self.active and self.playing,
+            "streaming": self.streaming,
+            "playback": self.playback,
+            "track": self.track_info(),
+            "error": self.error,
+        }
+
+    # -- receiver processes -------------------------------------------------------------
+
+    def run(self, bus_address):
+        """Starts avahi, nqptp and shairport-sync, each restarted if it dies."""
+        self.bus_address = bus_address
+        env = dict(os.environ, DBUS_SYSTEM_BUS_ADDRESS=bus_address)
+        os.makedirs(RUN_DIR, exist_ok=True)
+        avahi_conf = os.path.join(RUN_DIR, "avahi-daemon.conf")
+        # Only on the LAN: not on Supervisor's Docker network, where nothing can reach us.
+        allow = ",".join(_default_route_interfaces())
+        with open(avahi_conf, "w", encoding="utf-8") as f:
+            f.write(f"[server]\nhost-name={AIRPLAY_HOST_NAME}\n")
+            if allow:
+                f.write(f"allow-interfaces={allow}\n")
+            f.write(
+                "use-ipv4=yes\nuse-ipv6=yes\n"
+                "ratelimit-interval-usec=1000000\nratelimit-burst=1000\n"
+                "[publish]\npublish-hinfo=no\npublish-workstation=no\n"
+            )
+        os.makedirs("/run/avahi-daemon", exist_ok=True)
+        self._supervise(
+            "avahi-daemon",
+            lambda: ["avahi-daemon", "-f", avahi_conf, "--no-chroot", "--no-drop-root", "--no-rlimits"],
+            env,
+            _log_avahi,
+        )
+        self._supervise("nqptp", lambda: ["nqptp"], env)
+        pipe = os.path.join(RUN_DIR, "airplay-metadata")
+        if not os.path.exists(pipe):
+            os.mkfifo(pipe)
+        threading.Thread(target=self._read_metadata, args=(pipe,), daemon=True).start()
+        threading.Thread(target=self._pump_silence, daemon=True).start()
+        self._supervise("shairport-sync", lambda: self._shairport_command(pipe), env, self._read_pcm)
+        self.available = True
+        self.player.changed()
+
+    def _shairport_command(self, pipe):
+        conf = os.path.join(RUN_DIR, "shairport-sync.conf")
+        with open(conf, "w", encoding="utf-8") as f:
+            f.write(
+                "general = {\n"
+                f"  name = {_libconfig_string(SETTINGS['airplay_name'])};\n"
+                '  output_backend = "stdout";\n'
+                # Full-scale PCM: the receiver's volume is set on the receiver.
+                '  ignore_volume_control = "yes";\n'
+                "};\n"
+                "metadata = {\n"
+                '  enabled = "yes";\n'
+                '  include_cover_art = "yes";\n'
+                f"  pipe_name = {_libconfig_string(pipe)};\n"
+                "};\n"
+                "stdout = {\n"
+                f'  output_rate = {AIRPLAY_RATE};\n  output_format = "S16_LE";\n  output_channels = 2;\n'
+                "};\n"
+                f"sessioncontrol = {{\n  active_state_timeout = {AIRPLAY_ACTIVE_TIMEOUT};\n}};\n"
+            )
+        return ["shairport-sync", "-c", conf]
+
+    def _supervise(self, name, command, env, read_stdout=None):
+        def run():
+            failures = 0
+            while True:
+                started = time.monotonic()
+                try:
+                    proc = subprocess.Popen(
+                        command(),
+                        env=env,
+                        stdout=subprocess.PIPE if read_stdout else None,
+                        # avahi logs to stderr; it is filtered with its stdout.
+                        stderr=subprocess.STDOUT if read_stdout is _log_avahi else None,
+                    )
+                except OSError as e:
+                    log.error("airplay: cannot start %s: %s", name, e)
+                    self.available = False
+                    self.error = f"{name}: {e}"
+                    self.player.changed()
+                    return
+                if name == "shairport-sync":
+                    self.shairport = proc
+                if read_stdout:
+                    read_stdout(proc.stdout)
+                code = proc.wait()
+                failures = 0 if time.monotonic() - started > 60 else failures + 1
+                delay = AIRPLAY_RESTART_DELAYS[min(failures, len(AIRPLAY_RESTART_DELAYS) - 1)]
+                if name == "shairport-sync" and getattr(proc, "renaming", False):
+                    delay = 0
+                else:
+                    log.warning("airplay: %s exited with %s; restarting in %d s", name, code, delay)
+                if name == "shairport-sync":
+                    self._sender_gone()
+                time.sleep(delay)
+
+        threading.Thread(target=run, daemon=True).start()
+
+    def apply_name(self):
+        """Restarts shairport-sync under the new name (a connected sender is dropped)."""
+        proc = self.shairport
+        if proc is not None and proc.poll() is None:
+            proc.renaming = True
+            proc.terminate()
+
+    # -- audio --------------------------------------------------------------------------
+
+    def _read_pcm(self, stdout):
+        fd = stdout.fileno()
+        while True:
+            try:
+                data = os.read(fd, 16384)
+            except OSError:
+                data = b""
+            if not data:
+                stdout.close()
+                return
+            now = time.monotonic()
+            with self.lock:
+                started = not self.playing
+                self.playing = True
+                self.last_pcm = now
+                if self.streaming:
+                    self._write(data, now)
+            if started:
+                self._started_playing()
+
+    def _pump_silence(self):
+        """Fills pauses with silence so nyxr's live input keeps a steady clock, and notices
+        when the sender stops."""
+        while True:
+            time.sleep(0.02)
+            now = time.monotonic()
+            stopped = False
+            with self.lock:
+                if self.playing and now - self.last_pcm > AIRPLAY_PLAYING_GRACE:
+                    self.playing = False
+                    stopped = True
+                if self.streaming and now - self.last_written >= AIRPLAY_GAP_FILL:
+                    frames = int((now - self.last_written) * AIRPLAY_RATE)
+                    self._write(bytes(frames * AIRPLAY_FRAME_BYTES), now)
+            if stopped:
+                if self.progress is not None:
+                    seconds, length, at = self.progress
+                    self.progress = (seconds + AIRPLAY_PLAYING_GRACE, length, now)
+                self.player.changed()
+
+    def _write(self, data, now):
+        """Writes to nyxr without ever blocking (call with the lock held): while nyxr is
+        (re)connecting it does not read, and audio that does not fit is dropped."""
+        self.last_written = now
+        if self.nyxr is None:
+            return
+        data = self.owed + data
+        try:
+            n = os.write(self.nyxr.stdin.fileno(), data)
+        except BlockingIOError:
+            return
+        except (OSError, ValueError):
+            self.owed = b""
+            return
+        tail = (AIRPLAY_FRAME_BYTES - n % AIRPLAY_FRAME_BYTES) % AIRPLAY_FRAME_BYTES
+        self.owed = data[n : n + tail]
+
+    # -- metadata -----------------------------------------------------------------------
+
+    def _read_metadata(self, pipe):
+        while True:
+            try:
+                with open(pipe, "rb") as f:  # waits for shairport-sync to open it
+                    buf = b""
+                    while True:
+                        chunk = f.read1(65536)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        end = 0
+                        for m in METADATA_ITEM.finditer(buf):
+                            end = m.end()
+                            kind, code = bytes.fromhex(m[1].decode()), bytes.fromhex(m[2].decode())
+                            data = base64.b64decode(m[4]) if m[4] else b""
+                            try:
+                                self._on_metadata(kind, code, data)
+                            except Exception as e:  # one odd item must not stop the reader
+                                log.warning("airplay metadata %s/%s: %s", kind, code, e)
+                        buf = buf[end:]
+                        if len(buf) > 16 * 1024 * 1024:
+                            buf = b""  # not metadata we understand
+            except OSError as e:
+                log.warning("airplay metadata pipe: %s", e)
+                time.sleep(1)
+
+    def _on_metadata(self, kind, code, data):
+        if kind == b"ssnc":
+            if code == b"abeg":
+                log.info("airplay: sender connected")
+                self.active = True
+            elif code == b"aend":
+                log.info("airplay: sender gone")
+                self._sender_gone()
+            elif code == b"snam":
+                self.sender = data.decode("utf-8", "replace") or None
+            elif code == b"mdst":
+                self.pending_track = {}
+            elif code == b"mden":
+                track = {k: v for k, v in self.pending_track.items() if v}
+                if track != self.track:
+                    self.track = track
+                    self.track_seq += 1
+            elif code == b"PICT":
+                self._set_cover(data)
+            elif code == b"prgr":
+                start, current, end = (int(x) for x in data.decode().split("/"))
+                self.progress = (
+                    ((current - start) % 2**32) / AIRPLAY_RATE,
+                    ((end - start) % 2**32) / AIRPLAY_RATE,
+                    time.monotonic(),
+                )
+            else:
+                return
+        elif kind == b"core":
+            key = {b"minm": "title", b"asar": "artist", b"asal": "album"}.get(code)
+            if key:
+                self.pending_track[key] = data.decode("utf-8", "replace")
+            elif code == b"astm" and len(data) == 4:
+                self.pending_track["length"] = int.from_bytes(data, "big") / 1000
+            return
+        else:
+            return
+        self.player.changed()
+
+    def _set_cover(self, data):
+        old = self.cover
+        self.cover = None
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = "png"
+        elif data[:3] == b"\xff\xd8\xff":
+            ext = "jpg"
+        else:
+            ext = None  # empty: the track has no cover
+        if ext:
+            self.cover_seq += 1
+            path = os.path.join(RUN_DIR, f"airplay-cover-{self.cover_seq}.{ext}")
+            with open(path, "wb") as f:
+                f.write(data)
+            self.cover = "file://" + path
+        if old:
+            try:
+                os.unlink(old[len("file://"):])
+            except OSError:
+                pass
+
+    def _sender_gone(self):
+        was = self.active
+        self.active = False
+        self.sender = None
+        self.track = {}
+        self.progress = None
+        if was and self.streaming:
+            log.info("airplay: sender gone, stopping the stream")
+            self.loop.call_soon_threadsafe(lambda: self.loop.run_in_executor(None, self.stop))
+        self.player.changed()
+
+    # -- player commands (executor threads; same names as Player's) ---------------------
+
+    def _started_playing(self):
+        log.info("airplay: %s started playing", self.sender or "a sender")
+        if SETTINGS["airplay_auto_switch"] and not (
+            self.player.source == "airplay" and self.streaming
+        ):
+            self.loop.call_soon_threadsafe(
+                lambda: self.loop.run_in_executor(None, self._auto_switch)
+            )
+        self.player.changed()
+
+    def _auto_switch(self):
+        try:
+            self.player.sources.set_source("airplay")
+            self.start_stream()
+        except Conflict as e:
+            log.warning("airplay auto switch: %s", e)
+
+    def start_stream(self):
+        with self.lock:
+            if self.streaming:
+                return
+            if not self.active:
+                raise Conflict("no AirPlay sender is connected")
+            self.streaming = True
+            self.error = None
+        try:
+            cmd = nyxr_command(AIRPLAY_RATE, 2, AIRPLAY_BUFFER_MS)
+        except Conflict as e:
+            with self.lock:
+                self.streaming = False
+                self.error = str(e)
+            self.player.changed()
+            raise
+        log.info("starting nyxr for airplay: %s", shlex.join(cmd))
+        try:
+            proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, env=nyxr_env, bufsize=0)
+        except OSError:
+            with self.lock:
+                self.streaming = False
+            raise
+        os.set_blocking(proc.stdin.fileno(), False)
+        with self.lock:
+            self.nyxr = proc
+            self.owed = b""
+            self.last_written = time.monotonic()
+        threading.Thread(target=self._watch_nyxr, args=(proc,), daemon=True).start()
+        self.player.changed()
+
+    @staticmethod
+    def _end(proc):
+        if proc is None:
+            return
+        try:
+            proc.stdin.close()
+        except OSError:
+            pass
+        # SIGINT makes nyxr end the stream (TEARDOWN) at once.
+        proc.send_signal(signal.SIGINT)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+
+    def stop(self):
+        """Ends the stream (the HA switch); the sender stays connected."""
+        with self.lock:
+            proc = self.nyxr
+            self.nyxr = None
+            self.streaming = False
+        if proc is not None:
+            log.info("stopping nyxr for airplay")
+        self._end(proc)
+        self.player.changed()
+
+    def _watch_nyxr(self, proc):
+        code = proc.wait()
+        with self.lock:
+            if self.nyxr is not proc:
+                return  # stopped on purpose
+            log.warning("nyxr for airplay exited with %s", code)
+            self.nyxr = None
+            self.streaming = False
+            self.error = f"nyxr exited with {code}"
+        self._end(proc)
+        self.player.changed()
+
+    def play(self, track=None):
+        self.start_stream()
+
+    def play_pause(self):
+        if not self.streaming:
+            self.start_stream()
+
+    def pause(self):
+        pass  # no way back to the sender
+
+    def next(self):
+        pass
+
+    def previous(self):
+        pass
+
+    def seek(self, seconds):
+        pass
+
+
 class Sources:
     """Routes player commands to the selected source and switches between them: one stream
     at a time, so selecting one ends the other's."""
 
-    def __init__(self, player, bt):
+    def __init__(self, player, bt, airplay):
         self.player = player
         self.bt = bt
+        self.airplay = airplay
         player.sources = self
 
     @property
     def active(self):
-        return self.bt if self.player.source == "bluetooth" else self.player
+        return {"bluetooth": self.bt, "airplay": self.airplay}.get(self.player.source, self.player)
 
     def call(self, name, *args):
         return getattr(self.active, name)(*args)
@@ -2029,10 +2581,7 @@ class Sources:
         if source == self.player.source:
             return
         log.info("source: %s", source)
-        if source == "bluetooth":
-            self.player.stop()  # keeps the CD position
-        else:
-            self.bt.stop()
+        self.active.stop()  # the CD keeps its position
         with self.player.lock:
             self.player.source = source
         self.player.changed()
@@ -2083,7 +2632,7 @@ class MprisRoot(ServiceInterface):
 
 
 class MprisPlayer(ServiceInterface):
-    """The selected source (CD or Bluetooth) as one MPRIS player for nyxr."""
+    """The selected source (CD, Bluetooth or AirPlay) as one MPRIS player for nyxr."""
 
     def __init__(self, sources):
         super().__init__("org.mpris.MediaPlayer2.Player")
@@ -2175,6 +2724,8 @@ class MprisPlayer(ServiceInterface):
     def _track_id(self):
         if self._on_cd():
             return f"/org/nyx/cd/track/{self.p.track or 0}"
+        if self.s.active is self.s.airplay:
+            return f"/org/nyx/cd/airplay/{self.s.airplay.track_seq}"
         return f"/org/nyx/cd/bluetooth/{self.s.bt.track_seq}"
 
     @dbus_property(access=PropertyAccess.READ)
@@ -2220,6 +2771,8 @@ class MprisPlayer(ServiceInterface):
         return 1.0
 
     def _has_disc(self):
+        if self.s.active is self.s.airplay:
+            return False  # the sender can't be controlled from here
         if not self._on_cd():
             return self.s.bt.connected_device() is not None
         return self.p.disc is not None
@@ -2479,6 +3032,7 @@ def in_daemon_thread(fn, *args):
 
 
 NOT_AUDIO = object()
+SPIN_DOWN_SECONDS = 60
 
 
 async def monitor_drive(player):
@@ -2486,6 +3040,7 @@ async def monitor_drive(player):
     loaded = None  # disc id we have read the TOC for, or NOT_AUDIO
     failures = 0  # TOC reads that failed in a row
     last_status, last_limit = None, 0.0
+    stopped_at = None  # player.last_read when we last stopped the disc spinning
     while True:
         status = await loop.run_in_executor(None, drive_status)
         if status != "missing" and (status != last_status or time.monotonic() - last_limit > 30):
@@ -2531,6 +3086,19 @@ async def monitor_drive(player):
                 if meta:
                     log.info("disc is %s / %s", meta.get("artist"), meta.get("album"))
                     player.disc_loaded(disc_id, lengths, cd_tracks, meta)
+            player.last_read = time.monotonic()
+        if (
+            status == "ok"
+            and player.playback != "playing"
+            and stopped_at != player.last_read
+            and time.monotonic() - player.last_read > SPIN_DOWN_SECONDS
+        ):
+            try:
+                await loop.run_in_executor(None, spin_down)
+                log.info("disc idle for %d s, stopped it spinning", SPIN_DOWN_SECONDS)
+            except OSError as e:
+                log.warning("stopping the disc failed: %s", e)
+            stopped_at = player.last_read
         player.set_drive("not_audio" if loaded == NOT_AUDIO else status)
         await asyncio.sleep(2)
 
@@ -2586,8 +3154,12 @@ async def main():
     player = Player(loop)
     bt = Bluetooth(loop, player)
     player.bt = bt
-    sources = Sources(player, bt)
+    airplay = AirPlay(loop, player)
+    player.airplay = airplay
+    sources = Sources(player, bt, airplay)
     bus_daemon, bus = await start_mpris(sources)
+    if env("NYXR_COMPANION_AIRPLAY", "1") == "1":
+        airplay.run(nyxr_env["DBUS_SESSION_BUS_ADDRESS"])
     bluetooth = asyncio.ensure_future(bt.run())
 
     token = api_token()
@@ -2610,6 +3182,7 @@ async def main():
     receivers.cancel()
     await loop.run_in_executor(None, player.stop_stream)
     await loop.run_in_executor(None, bt.stop)
+    await loop.run_in_executor(None, airplay.stop)
     bluetooth.cancel()
     await runner.cleanup()
     bus.disconnect()

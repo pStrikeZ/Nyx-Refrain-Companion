@@ -23,6 +23,7 @@ async def async_setup_entry(
             NyxrCompanionStreamSwitch(coordinator),
             NyxrCompanionBluetoothPairingSwitch(coordinator),
             NyxrCompanionBluetoothAutoSwitch(coordinator),
+            NyxrCompanionAirPlayAutoSwitch(coordinator),
         ]
     )
 
@@ -96,3 +97,11 @@ class NyxrCompanionBluetoothAutoSwitch(NyxrCompanionSettingEntity, SwitchEntity)
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Do not switch automatically."""
         await self.async_set_setting(False)
+
+
+class NyxrCompanionAirPlayAutoSwitch(NyxrCompanionBluetoothAutoSwitch):
+    """Switch to AirPlay when a sender starts playing."""
+
+    _setting = "airplay_auto_switch"
+    _attr_translation_key = "airplay_auto_switch"
+    _attr_icon = "mdi:cast-variant"

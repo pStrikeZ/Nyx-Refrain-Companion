@@ -45,6 +45,16 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
     "track": {"number": 1, "title": "Title", "artist": "Artist", "album": "Album", "length": 223.4},
     "error": null
   },
+  "airplay": {
+    "available": true,
+    "name": "NyxR Companion",
+    "connected": "iPhone",
+    "playing": false,
+    "streaming": false,
+    "playback": "paused",
+    "track": {"number": 1, "title": "Title", "artist": "Artist", "album": "Album", "length": 215.0, "cover_url": "file:///run/nyxr-companion/airplay-cover-1.jpg"},
+    "error": null
+  },
   "receivers": [
     {"name": "Living Room", "address": "192.0.2.10:7000", "model": "AudioAccessory5,1"}
   ],
@@ -56,14 +66,16 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
     "target": "192.0.2.10:7000",
     "bluetooth_name": "NyxR Companion",
     "bluetooth_auto_switch": true,
-    "bluetooth_buffer_ms": 150
+    "bluetooth_buffer_ms": 150,
+    "airplay_name": "NyxR Companion",
+    "airplay_auto_switch": true
   }
 }
 ```
 
 | Field | Value |
 |---|---|
-| `source` | What is streamed: `cd` (default) or `bluetooth`. One at a time; `streaming`, `playback` and `error` are the selected source's |
+| `source` | What is streamed: `cd` (default), `bluetooth` or `airplay`. One at a time; `streaming`, `playback` and `error` are the selected source's |
 | `drive` | `ok` (a disc is in), `no_disc`, `tray_open`, `not_ready` (reading the disc), `not_audio` (no audio tracks: a data disc, a DVD, or a table of contents that could not be read 3 times in a row; playing is refused), `missing` (no drive, e.g. unplugged) |
 | `disc` | Not `null` only while `drive == "ok"` and the table of contents has been read. Audio tracks only: the data tracks of mixed-mode and CD-Extra discs are neither listed nor played, and `number` counts from 1. Metadata comes from MusicBrainz, else the disc's CD-Text (no cover); without either, `album` / `artist` / `cover_url` are `null` and titles are `Track01`, `Track02`… |
 | `streaming` | Whether nyxr is connected to the receiver |
@@ -74,6 +86,7 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
 | `error` | What went wrong last, or `null` |
 | `receivers` | AirPlay receivers found on the network (`nyxr discover`, at start and every 5 minutes): `{"name", "address", "model"}`, `model` is `null` when unknown |
 | `bluetooth` | The Bluetooth receiver, see below. `available` is `false` when the host has no D-Bus, BlueZ or adapter to use |
+| `airplay` | The AirPlay receiver, see below. `available` is `false` when shairport-sync could not be started |
 | `settings` | Settings, see below |
 
 ### Settings
@@ -90,6 +103,8 @@ Kept in `/data/settings.json` (the add-on's data folder) and changed with `POST 
 | `bluetooth_name` | 1–64 characters, the name phones see; default `NyxR Companion` | At once |
 | `bluetooth_auto_switch` | `true` (default) / `false`: switch to Bluetooth and stream when a connected device starts playing | At once |
 | `bluetooth_buffer_ms` | Whole number from 20 to 2000, jitter buffer for Bluetooth audio in milliseconds; default 150 | When the Bluetooth stream next starts |
+| `airplay_name` | 1–64 characters, the name in the AirPlay list; default `NyxR Companion` | At once: the receiver restarts under the new name, dropping a connected sender |
+| `airplay_auto_switch` | `true` (default) / `false`: switch to AirPlay and stream when a sender starts playing | At once |
 
 ### Bluetooth
 
@@ -105,6 +120,18 @@ Kept in `/data/settings.json` (the add-on's data folder) and changed with `POST 
 | `streaming` | Whether the Bluetooth stream's nyxr is connected to the receiver |
 | `playback` | The device's AVRCP playback state; guessed from whether it sends audio when it does not say |
 | `track` | AVRCP track info; without a title (or with Android's "Not Provided"), `title` is the device name |
+
+### AirPlay
+
+An AirPlay 2 receiver (shairport-sync) that iPhones, iPads and Macs can play to; what they send goes on to the speaker through nyxr, like the CD.
+
+| Field | Value |
+|---|---|
+| `connected` | Name of the connected sender, or `null` |
+| `playing` | The sender is sending audio |
+| `streaming` | Whether the AirPlay stream's nyxr is connected to the receiver |
+| `playback` | `playing` while audio arrives, `paused` while a sender is connected (or the stream is on) without audio, else `stopped` |
+| `track` | Track info and cover from the sender; without a title, `title` is the sender's name. `cover_url` is a file in the add-on, for nyxr |
 
 ## Endpoints
 
@@ -127,6 +154,6 @@ Kept in `/data/settings.json` (the add-on's data folder) and changed with `POST 
 | POST | `/api/bluetooth/disconnect` | `{}` | Disconnects the connected device (it stays paired) |
 | POST | `/api/bluetooth/forget` | `{"address": "AA:BB:CC:DD:EE:FF"}` | Removes the pairing with that device; without `address`, with all of `devices`. `400` for an address not in `devices`. A device that removed the pairing on its side needs none of this: while pairing is open, a paired device that connects and drops within 10 s without its services resolving is forgotten by itself, and can then pair again |
 
-`/api/stream`, `/api/play`, `/api/pause`, `/api/next` and `/api/previous` act on the selected source. For Bluetooth: turning the stream on needs a connected device (else `409`); play / pause / next / previous go to the device over AVRCP, and `track` is ignored. `/api/bluetooth/*` gives `409` while Bluetooth is not available.
+`/api/stream`, `/api/play`, `/api/pause`, `/api/next` and `/api/previous` act on the selected source. For Bluetooth: turning the stream on needs a connected device (else `409`); play / pause / next / previous go to the device over AVRCP, and `track` is ignored. `/api/bluetooth/*` gives `409` while Bluetooth is not available. For AirPlay: turning the stream on needs a connected sender (else `409`), and the stream ends 10 s after the sender stops or leaves; buffered AirPlay 2 gives the receiver no way back to the sender, so pause / next / previous do nothing and are left to the sender.
 
 A successful POST returns `200` and the new state object; a bad request `400`, a request the current state does not allow (no disc, say) `409`, a missing or wrong token `401`, each with `{"error": "what went wrong"}`.

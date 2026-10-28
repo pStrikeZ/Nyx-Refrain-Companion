@@ -417,13 +417,19 @@ from nyxr_companion.select import (
     NyxrCompanionSourceSelect,
     async_setup_entry as async_setup_select_entry,
 )
-from nyxr_companion.sensor import NyxrCompanionBluetoothSensor, NyxrCompanionStatusSensor
+from nyxr_companion.sensor import (
+    NyxrCompanionAirPlaySensor,
+    NyxrCompanionBluetoothSensor,
+    NyxrCompanionStatusSensor,
+)
 from nyxr_companion.switch import (
+    NyxrCompanionAirPlayAutoSwitch,
     NyxrCompanionBluetoothAutoSwitch,
     NyxrCompanionBluetoothPairingSwitch,
     NyxrCompanionStreamSwitch,
 )
 from nyxr_companion.text import (
+    NyxrCompanionAirPlayNameText,
     NyxrCompanionBluetoothNameText,
     NyxrCompanionTargetText,
     async_setup_entry as async_setup_text_entry,
@@ -665,7 +671,7 @@ class IntegrationTestCase(AioHTTPTestCase):
 
         text_entities: list[Any] = []
         await async_setup_text_entry(self.hass, self.entry, text_entities.extend)
-        self.assertEqual(len(text_entities), 2)
+        self.assertEqual(len(text_entities), 3)
 
         # Connect WebSocket
         ws_task = asyncio.create_task(self.coordinator.async_run_ws())
@@ -888,6 +894,54 @@ class IntegrationTestCase(AioHTTPTestCase):
         for entity in (pairing, device, disconnect, forget):
             self.assertFalse(entity.available)
         self.assertTrue(source.available)
+
+        await self.coordinator.async_close()
+        try:
+            await asyncio.wait_for(ws_task, timeout=1.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            ws_task.cancel()
+
+    async def test_airplay_entities(self) -> None:
+        self.entry.runtime_data = self.coordinator
+        await self.coordinator.async_setup()
+        ws_task = asyncio.create_task(self.coordinator.async_run_ws())
+        for _ in range(20):
+            if self.coordinator.connected:
+                break
+            await asyncio.sleep(0.05)
+        self.assertTrue(self.coordinator.connected)
+
+        source = NyxrCompanionSourceSelect(self.coordinator)
+        sender = NyxrCompanionAirPlaySensor(self.coordinator)
+        auto = NyxrCompanionAirPlayAutoSwitch(self.coordinator)
+        name = NyxrCompanionAirPlayNameText(self.coordinator)
+
+        uid_base = self.entry.unique_id
+        self.assertEqual(sender.unique_id, f"{uid_base}_airplay_sender")
+        self.assertEqual(auto.unique_id, f"{uid_base}_airplay_auto_switch")
+        self.assertEqual(name.unique_id, f"{uid_base}_airplay_name")
+        for entity in (auto, name):
+            self.assertEqual(entity.entity_category, EntityCategory.CONFIG)
+
+        self.assertIn("airplay", source.options)
+        self.assertEqual(sender.native_value, "iPhone")
+        self.assertEqual(sender.extra_state_attributes["track_title"], "Ref:rain")
+        self.assertTrue(auto.is_on)
+        self.assertEqual(name.native_value, "NyxR Companion")
+
+        await source.async_select_option("airplay")
+        self.assertEqual(source.current_option, "airplay")
+        await auto.async_turn_off()
+        self.assertFalse(auto.is_on)
+        await name.async_set_value("Living Room")
+        self.assertEqual(name.native_value, "Living Room")
+
+        # Without the receiver running, its sensor is unavailable; the settings stay.
+        data = dict(self.coordinator.data)
+        data["airplay"] = {"available": False}
+        self.coordinator.async_set_updated_data(data)
+        self.assertFalse(sender.available)
+        self.assertTrue(name.available)
 
         await self.coordinator.async_close()
         try:

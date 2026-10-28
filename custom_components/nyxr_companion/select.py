@@ -36,7 +36,7 @@ async def async_setup_entry(
 
 
 class NyxrCompanionSourceSelect(NyxrCompanionEntity, SelectEntity):
-    """Select entity for what is streamed: the CD or Bluetooth."""
+    """Select entity for what is streamed: the CD, Bluetooth or AirPlay."""
 
     _attr_translation_key = "source"
     _attr_icon = "mdi:import"

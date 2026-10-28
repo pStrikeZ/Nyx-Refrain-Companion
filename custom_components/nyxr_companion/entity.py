@@ -45,6 +45,21 @@ class NyxrCompanionBluetoothEntity(NyxrCompanionEntity):
         return super().available and bool(self.bluetooth.get("available"))
 
 
+class NyxrCompanionAirPlayEntity(NyxrCompanionEntity):
+    """Base for entities about the AirPlay receiver."""
+
+    @property
+    def airplay(self) -> dict[str, Any]:
+        """Return the daemon's AirPlay state."""
+        airplay = (self.coordinator.data or {}).get("airplay")
+        return airplay if isinstance(airplay, dict) else {}
+
+    @property
+    def available(self) -> bool:
+        """Return True while the AirPlay receiver runs."""
+        return super().available and bool(self.airplay.get("available"))
+
+
 class NyxrCompanionSettingEntity(NyxrCompanionEntity):
     """Base for entities that show and change one of the daemon's settings."""
 
