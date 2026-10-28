@@ -24,6 +24,7 @@ async def async_setup_entry(
             NyxrCompanionBluetoothPairingSwitch(coordinator),
             NyxrCompanionBluetoothAutoSwitch(coordinator),
             NyxrCompanionAirPlayAutoSwitch(coordinator),
+            NyxrCompanionCdAutoPlaySwitch(coordinator),
         ]
     )
 
@@ -105,3 +106,11 @@ class NyxrCompanionAirPlayAutoSwitch(NyxrCompanionBluetoothAutoSwitch):
     _setting = "airplay_auto_switch"
     _attr_translation_key = "airplay_auto_switch"
     _attr_icon = "mdi:cast-variant"
+
+
+class NyxrCompanionCdAutoPlaySwitch(NyxrCompanionBluetoothAutoSwitch):
+    """Switch to the CD and play a disc when it is put in."""
+
+    _setting = "cd_auto_play"
+    _attr_translation_key = "cd_auto_play"
+    _attr_icon = "mdi:disc-player"

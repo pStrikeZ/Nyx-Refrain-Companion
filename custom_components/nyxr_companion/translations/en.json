@@ -38,6 +38,9 @@
       },
       "airplay_auto_switch": {
         "name": "Switch to AirPlay automatically"
+      },
+      "cd_auto_play": {
+        "name": "Play inserted discs automatically"
       }
     },
     "select": {

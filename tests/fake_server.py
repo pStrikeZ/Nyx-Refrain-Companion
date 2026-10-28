@@ -50,6 +50,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "bluetooth_buffer_ms": 150,
     "airplay_name": "NyxR Companion",
     "airplay_auto_switch": True,
+    "cd_auto_play": True,
 }
 
 DEFAULT_BLUETOOTH: dict[str, Any] = {
@@ -358,7 +359,7 @@ async def handle_post_settings(request: web.Request) -> web.Response:
                     {"error": f"Invalid {name}: {value}"}, status=400
                 )
             updates[name] = value.strip()
-        elif name in ("bluetooth_auto_switch", "airplay_auto_switch"):
+        elif name in ("bluetooth_auto_switch", "airplay_auto_switch", "cd_auto_play"):
             if not isinstance(value, bool):
                 return web.json_response(
                     {"error": f"Invalid {name}: {value}"}, status=400

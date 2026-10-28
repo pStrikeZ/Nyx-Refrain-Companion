@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- CD: putting a disc in plays it from the first track, like a CD player, switching from Bluetooth or AirPlay if they are playing. A disc already in the drive when the add-on starts is not played. New setting *Play inserted discs automatically* (on by default).
+
 ## 0.2.0
 
 - AirPlay receiver: iPhones, iPads and Macs can play to NyxR Companion, and it passes their audio on to the speaker, with track info and cover. It switches to AirPlay when a sender starts playing (can be turned off), and its name in the AirPlay list can be changed.

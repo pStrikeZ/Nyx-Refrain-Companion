@@ -68,7 +68,8 @@
     "bluetooth_auto_switch": true,
     "bluetooth_buffer_ms": 150,
     "airplay_name": "NyxR Companion",
-    "airplay_auto_switch": true
+    "airplay_auto_switch": true,
+    "cd_auto_play": true
   }
 }
 ```
@@ -105,6 +106,7 @@
 | `bluetooth_buffer_ms` | 20–2000 的整数，蓝牙音频的抖动缓冲（毫秒），默认 150 | 下次打开蓝牙推流 |
 | `airplay_name` | 1–64 个字符，AirPlay 列表里显示的名称，默认 `NyxR Companion` | 立即：接收端用新名称重启，已连接的发送端会断开 |
 | `airplay_auto_switch` | `true`（默认）/ `false`：发送端开始播放时自动切到 AirPlay 并推流 | 立即 |
+| `cd_auto_play` | `true`（默认）/ `false`：放入光盘时切到 CD（结束蓝牙或 AirPlay 推流），从第一轨开始播放。加载项启动时已在光驱里的盘不会自动播放 | 立即 |
 
 ### 蓝牙
 

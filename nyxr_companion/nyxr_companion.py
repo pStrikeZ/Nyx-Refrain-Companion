@@ -186,6 +186,7 @@ SETTINGS_SPEC = {
     "bluetooth_buffer_ms": (_number(20, 2000, int), 150),
     "airplay_name": (_name, "NyxR Companion"),
     "airplay_auto_switch": (_bool, True),
+    "cd_auto_play": (_bool, True),
 }
 for _name, _var, _default in (
     ("read_speed", "NYXR_COMPANION_READ_SPEED", 4),
@@ -981,6 +982,17 @@ class Player:
             self.playback = "playing"
             self.lock.notify_all()
         self.changed()
+
+    def auto_play(self):
+        """A disc was put in: switch to the CD, ending a Bluetooth or AirPlay stream, and
+        play it from the start."""
+        try:
+            self.sources.set_source("cd")
+            self.play()
+        except Conflict as e:
+            log.warning("playing the inserted disc: %s", e)
+        else:
+            log.info("disc inserted, playing it")
 
     def pause(self):
         with self.lock:
@@ -3041,6 +3053,9 @@ async def monitor_drive(player):
     failures = 0  # TOC reads that failed in a row
     last_status, last_limit = None, 0.0
     stopped_at = None  # player.last_read when we last stopped the disc spinning
+    # The drive was seen empty or open, so the next disc is one put in now (not one that
+    # was already in when the daemon started), and plays like on a CD player.
+    emptied = False
     while True:
         status = await loop.run_in_executor(None, drive_status)
         if status != "missing" and (status != last_status or time.monotonic() - last_limit > 30):
@@ -3052,6 +3067,7 @@ async def monitor_drive(player):
             continue  # spinning up or busy reading; the disc has not changed
         if status != "ok":
             loaded, failures = None, 0
+            emptied = emptied or status in ("no_disc", "tray_open")
         elif loaded is None:
             try:
                 disc_id, lengths, cd_tracks = await loop.run_in_executor(None, read_toc)
@@ -3076,6 +3092,9 @@ async def monitor_drive(player):
                 if cdtext:
                     log.info("CD-Text: %s / %s", cdtext.get("artist"), cdtext.get("album"))
                 player.disc_loaded(disc_id, lengths, cd_tracks, cdtext)
+                if emptied and SETTINGS["cd_auto_play"]:
+                    loop.run_in_executor(None, player.auto_play)
+                emptied = False
                 try:
                     meta = await asyncio.wait_for(
                         in_daemon_thread(lookup_metadata, disc_id, len(lengths)), 30

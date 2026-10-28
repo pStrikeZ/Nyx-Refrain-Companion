@@ -38,6 +38,9 @@
       },
       "airplay_auto_switch": {
         "name": "AirPlay 自动切换"
+      },
+      "cd_auto_play": {
+        "name": "插入光盘自动播放"
       }
     },
     "select": {

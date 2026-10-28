@@ -424,6 +424,7 @@ from nyxr_companion.sensor import (
 )
 from nyxr_companion.switch import (
     NyxrCompanionAirPlayAutoSwitch,
+    NyxrCompanionCdAutoPlaySwitch,
     NyxrCompanionBluetoothAutoSwitch,
     NyxrCompanionBluetoothPairingSwitch,
     NyxrCompanionStreamSwitch,
@@ -920,6 +921,12 @@ class IntegrationTestCase(AioHTTPTestCase):
         self.assertEqual(sender.unique_id, f"{uid_base}_airplay_sender")
         self.assertEqual(auto.unique_id, f"{uid_base}_airplay_auto_switch")
         self.assertEqual(name.unique_id, f"{uid_base}_airplay_name")
+        cd_auto = NyxrCompanionCdAutoPlaySwitch(self.coordinator)
+        self.assertEqual(cd_auto.unique_id, f"{uid_base}_cd_auto_play")
+        self.assertEqual(cd_auto.entity_category, EntityCategory.CONFIG)
+        self.assertTrue(cd_auto.is_on)
+        await cd_auto.async_turn_off()
+        self.assertFalse(cd_auto.is_on)
         for entity in (auto, name):
             self.assertEqual(entity.entity_category, EntityCategory.CONFIG)
 

@@ -68,7 +68,8 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
     "bluetooth_auto_switch": true,
     "bluetooth_buffer_ms": 150,
     "airplay_name": "NyxR Companion",
-    "airplay_auto_switch": true
+    "airplay_auto_switch": true,
+    "cd_auto_play": true
   }
 }
 ```
@@ -105,6 +106,7 @@ Kept in `/data/settings.json` (the add-on's data folder) and changed with `POST 
 | `bluetooth_buffer_ms` | Whole number from 20 to 2000, jitter buffer for Bluetooth audio in milliseconds; default 150 | When the Bluetooth stream next starts |
 | `airplay_name` | 1–64 characters, the name in the AirPlay list; default `NyxR Companion` | At once: the receiver restarts under the new name, dropping a connected sender |
 | `airplay_auto_switch` | `true` (default) / `false`: switch to AirPlay and stream when a sender starts playing | At once |
+| `cd_auto_play` | `true` (default) / `false`: when a disc is put in, switch to the CD (ending a Bluetooth or AirPlay stream) and play it from the first track. A disc already in the drive when the add-on starts is not played | At once |
 
 ### Bluetooth
 
