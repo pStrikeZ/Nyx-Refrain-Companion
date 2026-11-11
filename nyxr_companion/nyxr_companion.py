@@ -815,6 +815,7 @@ COVER_STEMS = ("cover", "folder", "front", "album", "albumart")
 COVER_EXTENSIONS = ("jpg", "jpeg", "png")
 MAX_COVER_BYTES = 16 << 20
 PROBE_TIMEOUT = 30
+SPOOL_EXTENSIONS = (".m4a", ".m4b", ".mp4", ".mov", ".3gp", ".alac")  # indexes may sit at the end
 SPOOL_LIMIT = 96 << 20  # files up to this size are copied off a disc before ffmpeg reads them
 
 
@@ -903,14 +904,19 @@ def scan_data_disc():
         return None
     session_start, last_block = 0, None
     try:
-        # struct cdrom_multisession: the last session's first block, asked for as an LBA.
-        arg = bytearray(struct.pack("<iBB2x", 0, 0, 1))
-        fcntl.ioctl(device.fd, CDROMMULTISESSION, arg)
-        start, multisession = struct.unpack_from("<iB", arg)
-        if multisession and start > 0:
-            session_start = start
+        session_start = device.last_session_start() or 0
     except OSError:
         pass
+    if not session_start:
+        try:
+            # struct cdrom_multisession: the last session's first block, asked for as an LBA.
+            arg = bytearray(struct.pack("<iBB2x", 0, 0, 1))
+            fcntl.ioctl(device.fd, CDROMMULTISESSION, arg)
+            start, multisession = struct.unpack_from("<iB", arg)
+            if multisession and start > 0:
+                session_start = start
+        except OSError:
+            pass
     try:
         # Discs written in packets keep their newest table at the last block written.
         arg = bytearray(struct.pack("l", 0))
@@ -940,8 +946,8 @@ def _ffmpeg_input(disc, f):
     """ffmpeg's input arguments for a file, and whether it reads the file from stdin."""
     where = disc.where(f)
     if where is None:
-        if f.size <= SPOOL_LIMIT:
-            # A pipe cannot be sought in, and an M4A with its index at the end needs that:
+        if f.size <= SPOOL_LIMIT and f.name.lower().endswith(SPOOL_EXTENSIONS):
+            # A pipe cannot be sought in, and an MP4 with its index at the end needs that:
             # copy the file out of the drive first (a few seconds at the drive's speed).
             path = spool(disc, f)
             if path:
@@ -1010,6 +1016,9 @@ def _feed(disc, f, proc):
 
 def _run_ffmpeg(disc, f, tool, before, after, limit):
     """Runs ffprobe / ffmpeg on a file; returns its stdout (up to `limit` bytes) or None."""
+    began = time.monotonic()
+    if disc.device is not None:
+        disc.device.spin_up()
     source, piped, temp = _ffmpeg_input(disc, f)
     cmd = [tool, "-v", "error", *before, *source, *after]
     try:
@@ -1034,6 +1043,7 @@ def _run_ffmpeg(disc, f, tool, before, after, limit):
         timer.cancel()
         if temp:
             os.unlink(temp)
+    log.info("%s %s took %.1f s", tool, f.name, time.monotonic() - began)
     return out if proc.returncode == 0 and len(out) <= limit else None
 
 
@@ -1078,7 +1088,7 @@ def probe_file(disc, f):
 
 
 def embedded_picture(disc, f):
-    return _run_ffmpeg(disc, f, "ffmpeg", ["-nostdin"], [
+    return _run_ffmpeg(disc, f, "ffmpeg", ["-nostdin", "-t", "1"], [  # -t: stop reading after the picture
         "-an", "-map", "0:v:0", "-frames:v", "1", "-c:v", "copy", "-f", "image2pipe", "pipe:1",
     ], MAX_COVER_BYTES)
 
@@ -1126,6 +1136,9 @@ class FileReader:
         self.proc = None
         self.error = None
         self.log = tempfile.TemporaryFile()
+        self.began = time.monotonic()
+        if disc.device is not None:
+            disc.device.spin_up()
         source, piped, self.temp = _ffmpeg_input(disc, f)
         seek = ["-ss", f"{offset / SECTORS_PER_SECOND:.3f}"] if offset else []
         cmd = ["ffmpeg", "-nostdin", "-v", "error", *seek, *source,
@@ -1147,6 +1160,8 @@ class FileReader:
         if self.proc is None:
             return b""
         data = self.proc.stdout.read(size)
+        if data and not self.produced:
+            log.info("%s: sound after %.1f s", self.name, time.monotonic() - self.began)
         self.produced += len(data)
         return data
 

@@ -86,6 +86,47 @@ class Device:
             pass
         return bytes(out)
 
+    def _command(self, cdb, size):
+        """The reply to a read-type command over SG_IO, or None if the drive refuses."""
+        buf = ctypes.create_string_buffer(size)
+        c = ctypes.create_string_buffer(bytes(cdb), len(cdb))
+        sense = ctypes.create_string_buffer(32)
+        hdr = _SgHeader(ord("S"), -3, len(cdb), 32, 0, size, ctypes.addressof(buf),
+                        ctypes.addressof(c), ctypes.addressof(sense), 20000)
+        try:
+            fcntl.ioctl(self.fd, 0x2285, hdr)  # SG_IO
+        except OSError:
+            return None
+        if hdr.status or hdr.host_status or hdr.driver_status & 0xF:
+            return None
+        return buf.raw
+
+    def spin_up(self):
+        """START STOP UNIT (start): returns once the drive is ready. A drive that went to
+        sleep fails the reads that wake it, slowly, through the block device."""
+        buf = ctypes.create_string_buffer(8)
+        cdb = ctypes.create_string_buffer(bytes([0x1B, 0, 0, 0, 1, 0]), 6)
+        sense = ctypes.create_string_buffer(32)
+        hdr = _SgHeader(ord("S"), -3, 6, 32, 0, 0, ctypes.addressof(buf),
+                        ctypes.addressof(cdb), ctypes.addressof(sense), 30000)
+        try:
+            fcntl.ioctl(self.fd, 0x2285, hdr)
+        except OSError:
+            pass
+
+    def last_session_start(self):
+        """First block of the disc's last session, from the drive (READ DISC INFORMATION,
+        READ TRACK INFORMATION), or None. The kernel keeps what it saw when the medium was
+        first read, which in a VM can be the disc before this one."""
+        info = self._command([0x51, 0, 0, 0, 0, 0, 0, 0, 34, 0], 34)
+        if info is None:
+            return None
+        track = info[10] << 8 | info[5]  # first track of the last session
+        reply = self._command([0x52, 1, *struct.pack(">I", track), 0, 0, 48, 0], 48)
+        if reply is None:
+            return None
+        return struct.unpack(">I", reply[8:12])[0]
+
     def _sg_read(self, offset, size):
         """READ (12) through SG_IO: up to 64 blocks from the one holding `offset`."""
         block, skip = divmod(offset, BLOCK)
