@@ -1077,6 +1077,25 @@ def _drive_counters():
         return 0, 0
 
 
+def wait_for_quiet_drive(settle=3.0, quiet=1.5, limit=60.0):
+    """Waits until nobody else reads the drive. A new disc makes the system's udev probe
+    it (blkid reads the end of the disc, in 4 KB pieces); the daemon's own reads at the
+    same time make the head swing between the two, and every read takes a quarter of a
+    second. `settle` gives udev time to start, `quiet` is how long the drive must have
+    stayed unread. Returns how long it waited."""
+    began = time.monotonic()
+    if not (FAKE_DISC or FAKE_DATA_DISC):
+        last, last_change = _drive_counters(), time.monotonic()
+        while True:
+            time.sleep(0.5)
+            now, count = time.monotonic(), _drive_counters()
+            if count != last:
+                last, last_change = count, now
+            if now - began > limit or (now - began >= settle and now - last_change >= quiet):
+                break
+    return time.monotonic() - began
+
+
 def _run_ffmpeg(disc, f, tool, before, after, limit):
     """Runs ffprobe / ffmpeg on a file; returns its stdout (up to `limit` bytes) or None."""
     began = time.monotonic()
@@ -3709,6 +3728,9 @@ async def load_data_disc(player, inserted):
     """The disc has no audio tracks: looks for music files on it. Returns what
     monitor_drive keeps as `loaded`."""
     loop = asyncio.get_running_loop()
+    waited = await loop.run_in_executor(None, wait_for_quiet_drive)
+    if waited > 5:
+        log.info("waited %.1f s for other readers of the drive", waited)
     try:
         data = await loop.run_in_executor(None, scan_data_disc)
     except Exception:
