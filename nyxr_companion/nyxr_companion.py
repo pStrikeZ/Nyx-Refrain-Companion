@@ -1154,7 +1154,46 @@ def probe_file(disc, f):
     }
 
 
+def flac_picture(read, size):
+    """The front cover (else the first picture) in a FLAC file's metadata blocks, read
+    straight from the head of the file: ffmpeg reads the whole file for a picture it
+    finds in the first kilobytes, in small requests that make the drive seek all over
+    the disc. `read(offset, count)` returns bytes. None if there is no picture."""
+    if read(0, 4) != b"fLaC":
+        return None
+    offset, best = 4, None
+    while offset + 4 <= size:
+        head = read(offset, 4)
+        if len(head) < 4:
+            break
+        last, kind, length = head[0] & 0x80, head[0] & 0x7F, int.from_bytes(head[1:4], "big")
+        offset += 4
+        if kind == 6 and length <= MAX_COVER_BYTES:
+            block = read(offset, length)
+            try:
+                picture_type, n = struct.unpack_from(">II", block, 0)
+                n2 = struct.unpack_from(">I", block, 8 + n)[0]
+                at = 12 + n + n2 + 16
+                (n3,) = struct.unpack_from(">I", block, at)
+                data = block[at + 4 : at + 4 + n3]
+            except struct.error:
+                return None
+            if data and (best is None or (picture_type == 3 and best[0] != 3)):
+                best = (picture_type, data)
+            if picture_type == 3:
+                break
+        offset += length
+        if last:
+            break
+    return best[1] if best else None
+
+
 def embedded_picture(disc, f):
+    if f.name.lower().endswith(".flac"):
+        try:
+            return flac_picture(lambda offset, count: disc.read(f, offset, count), f.size)
+        except OSError:
+            pass
     return _run_ffmpeg(disc, f, "ffmpeg", ["-nostdin", "-t", "1"], [  # -t: stop reading after the picture
         "-an", "-map", "0:v:0", "-frames:v", "1", "-c:v", "copy", "-f", "image2pipe", "pipe:1",
     ], MAX_COVER_BYTES)

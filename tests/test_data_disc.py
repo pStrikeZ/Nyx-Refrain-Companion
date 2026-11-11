@@ -101,6 +101,27 @@ class DataDiscTest(unittest.TestCase):
     def titles(self):
         return [t["title"] for t in self.player.disc["tracks"]]
 
+    def test_flac_picture_from_the_head(self):
+        import struct
+
+        def picture(kind, data):
+            body = struct.pack(">II", kind, 9) + b"image/png" + struct.pack(">I", 0)
+            body += struct.pack(">IIII", 1, 1, 24, 0) + struct.pack(">I", len(data)) + data
+            return b"\x06" + len(body).to_bytes(3, "big") + body  # not the last block
+
+        info = b"\x00" + (34).to_bytes(3, "big") + bytes(34)
+        end = b"\x81" + (0).to_bytes(3, "big")  # last block: empty padding
+        for blocks, expected in (
+            (picture(0, b"other") + picture(3, b"front"), b"front"),
+            (picture(4, b"back") + picture(0, b"x"), b"back"),
+            (b"", None),
+        ):
+            flac = b"fLaC" + info + blocks + end + bytes(1000)
+            self.assertEqual(
+                daemon.flac_picture(lambda o, n: flac[o : o + n], len(flac)), expected
+            )
+        self.assertIsNone(daemon.flac_picture(lambda o, n: b"RIFF"[o : o + n], 4))
+
     def test_listing(self):
         # Files of the root first, then folder by folder; "2" before "10"; only music.
         self.assertEqual(
