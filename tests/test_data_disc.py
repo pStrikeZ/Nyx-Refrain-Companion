@@ -179,6 +179,38 @@ class DataDiscTest(unittest.TestCase):
         with self.assertRaises(daemon.BadRequest):
             self.player.play_folder("No Such Folder")
 
+    def test_playing_kept_to_a_folder(self):
+        p = self.player
+        p.play_folder("Album B")
+        self.assertEqual(p.snapshot()["disc"]["scope"], "Album B")
+        seen = []
+        for _ in range(4):  # 4 -> 5 -> 6 -> back to 4
+            seen.append(p.track)
+            p.next()
+        self.assertEqual(seen + [p.track], [4, 5, 6, 4, 5])
+        p.previous()
+        p.previous()
+        self.assertEqual(p.track, 6)  # the first one wraps to the last of the folder
+        p.set_mode("shuffle")
+        p.play_folder("Album B")
+        for _ in range(12):
+            self.assertIn(p.track, (4, 5, 6))
+            p.next()
+        track = p.track
+        p.play_folder(None)  # the whole disc again, the track goes on
+        self.assertEqual((p.track, p.snapshot()["disc"]["scope"]), (track, None))
+        outside = {p.track}
+        for _ in range(60):
+            p.next()
+            outside.add(p.track)
+        self.assertTrue(outside - {4, 5, 6})
+        p.play_folder("Album B")
+        p.play(1)  # a track from outside the folder leaves it
+        self.assertIsNone(p.snapshot()["disc"]["scope"])
+        p.set_mode("repeat_all")
+        with self.assertRaises(daemon.BadRequest):
+            p.play_folder(5)
+
     def test_seek(self):
         self.player.play(1)
         self.assertTrue(wait_for(lambda: self.player.track == 1 and self.player.lengths[0]))

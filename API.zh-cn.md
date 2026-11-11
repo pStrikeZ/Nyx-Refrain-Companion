@@ -123,6 +123,7 @@
 | `track_count` | 盘上音乐文件的总数。`track` 和 `/api/play` 的曲目号在全盘范围内编号 |
 | `folders` | 有音乐的文件夹，按播放顺序：`name`（从光盘根目录起的路径，根目录本身是 `""`）、`first`（其中第一首的曲目号）、`tracks`（曲目数） |
 | `folder` | 当前曲目所在的文件夹（还没播放时是第一个文件夹） |
+| `scope` | 播放被限定在哪个文件夹里（见 `/api/folder`），整张盘为 `null` |
 | `tracks` | 只列 `folder` 里的曲目：一张盘可能有几千个文件。`number` 是全盘曲目号 |
 
 文件的标签、时长和封面在快要播放到它时才读取。在那之前，`title` 是去掉扩展名的文件名，`album` 是文件夹名（根目录用卷标），`length` 为 `null`。`cover_url` 取文件内嵌的图片，没有就取同一文件夹里名为 `cover` / `folder` / `front` / `album` / `albumart` 的 `.jpg` / `.png`；它是加载项里的文件，给 nyxr 用。解码不了的文件会被跳过，`error` 里写明是哪个。
@@ -182,7 +183,7 @@ AirPlay 2 接收端（shairport-sync），iPhone、iPad、Mac 可以往这里推
 | POST | `/api/mode` | `{"mode": "shuffle"}` | 设置播放模式 |
 | POST | `/api/eject` | `{}` | 断开推流并弹出光盘 |
 | POST | `/api/play` | `{"track": 3}` | 播放指定曲目（会打开推流）；不带 `track` 时等同继续播放 |
-| POST | `/api/folder` | `{"folder": "Album A"}` | 数据盘：从该文件夹的第一个文件开始播放（会打开推流）。文件夹不在 `folders` 里返回 `400`，没有数据盘返回 `409` |
+| POST | `/api/folder` | `{"folder": "Album A"}` | 数据盘：从该文件夹的第一个文件开始播放（会打开推流），并且之后只在这个文件夹里播放：下一首、上一首、一首放完、随机都不出这个文件夹（放完会绕回开头）。`{"folder": null}` 回到整张盘，当前曲目继续放；播放文件夹外的曲目、换盘也会回到整张盘。文件夹不在 `folders` 里返回 `400`，没有数据盘返回 `409` |
 | POST | `/api/pause` | `{}` | 暂停（推流保持） |
 | POST | `/api/next` | `{}` | 下一首 |
 | POST | `/api/previous` | `{}` | 上一首（播放超过 3 秒时回到本曲开头） |

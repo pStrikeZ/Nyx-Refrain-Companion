@@ -1350,6 +1350,7 @@ class Player:
 
         self.order = []  # shuffle order (track numbers) and our place in it
         self.order_pos = 0
+        self.scope = None  # a data disc's folder that playing is kept to (None: the whole disc)
 
         # Each read of a track gets a sequence number, so the writer can tell a repeated
         # track (single-track repeat) from the one before it.
@@ -1446,6 +1447,7 @@ class Player:
             disc,
             track_count=len(disc["tracks"]),
             folder=folder,
+            scope=self.scope,
             folders=folders,
             tracks=[
                 {k: v for k, v in t.items() if k not in hidden}
@@ -1459,8 +1461,15 @@ class Player:
     def _count(self):
         return len(self.lengths)
 
+    def _pool(self):
+        """The track numbers that playing goes over: the whole disc, or the folder it is
+        kept to."""
+        if self.scope is None or self.disc is None:
+            return list(range(1, self._count() + 1))
+        return [t["number"] for t in self.disc["tracks"] if t["folder"] == self.scope]
+
     def _reshuffle(self, first=None):
-        rest = [t for t in range(1, self._count() + 1) if t != first]
+        rest = [t for t in self._pool() if t != first]
         random.shuffle(rest)
         self.order = ([first] if first else []) + rest
         self.order_pos = 0
@@ -1483,7 +1492,7 @@ class Player:
             self._reshuffle(track)
             i = 0
         if i + 1 >= len(self.order):
-            more = list(range(1, self._count() + 1))
+            more = self._pool()
             random.shuffle(more)
             if len(more) > 1 and more[0] == self.order[-1]:
                 more.append(more.pop(0))
@@ -1499,7 +1508,17 @@ class Player:
             return track
         if self.mode == "shuffle":
             return self.order[self._shuffle_next(track)]
-        return track + 1 if track < n else 1
+        pool = self._pool()
+        if track not in pool:
+            return pool[0]
+        i = pool.index(track)
+        return pool[i + 1] if i + 1 < len(pool) else pool[0]
+
+    def _previous_track(self, track):
+        pool = self._pool()
+        if track not in pool:
+            return pool[-1]
+        return pool[pool.index(track) - 1]  # the first one wraps to the last
 
     def _advance_order(self, track):
         if self.mode == "shuffle":
@@ -1545,6 +1564,10 @@ class Player:
         self.start_stream()
         with self.lock:
             if track is not None:
+                if self.scope is not None and track not in self._pool():
+                    self.scope = None  # a track picked from outside the folder leaves it
+                    if self.mode == "shuffle":
+                        self._reshuffle(track)
                 self._jump(track)
             elif self.track is None:
                 self._jump(self.order[0] if self.mode == "shuffle" and self.order else 1)
@@ -1566,16 +1589,27 @@ class Player:
             log.info("disc inserted, playing it")
 
     def play_folder(self, folder):
-        """Plays a data disc's folder from its first file."""
-        if not isinstance(folder, str):
-            raise BadRequest('"folder" must be the name of a folder on the disc')
+        """Keeps playing to a data disc's folder, from its first file; None goes back to
+        the whole disc (the track playing goes on)."""
+        if folder is not None and not isinstance(folder, str):
+            raise BadRequest('"folder" must be the name of a folder on the disc, or null')
         with self.lock:
             if self.disc is None or self.data is None:
                 raise Conflict("no data disc")
-            first = next((t["number"] for t in self.disc["tracks"] if t["folder"] == folder), None)
+            first = None
+            if folder is not None:
+                first = next((t["number"] for t in self.disc["tracks"] if t["folder"] == folder), None)
+                if first is None:
+                    raise BadRequest(f"no folder {folder!r} with music on the disc")
+            self.scope = folder
+            if self.mode == "shuffle":
+                self._reshuffle(first or self.track)
+            if first is None:
+                self._replan()  # the track queued next may be one the scope no longer wants
         if first is None:
-            raise BadRequest(f"no folder {folder!r} with music on the disc")
-        self.play(first)
+            self.changed()
+        else:
+            self.play(first)
 
     def pause(self):
         with self.lock:
@@ -1610,7 +1644,7 @@ class Player:
                 pos = max(0, self.order_pos - 1)
                 self._jump(self.order[pos], order_pos=pos)
             else:
-                self._jump(self.track - 1 if self.track > 1 else self._count())
+                self._jump(self._previous_track(self.track))
         self.changed()
 
     def seek(self, seconds):
@@ -1624,6 +1658,26 @@ class Player:
             self._jump(self.track, offset)
         self.changed()
 
+    def _replan(self):
+        """The reader may already have queued the track that the old mode (or scope) chose
+        next: drops it and lets the current one decide. Call with the lock held."""
+        # Likewise when the reader has finished the current track and stopped.
+        if self.track is not None and (
+            self.reading not in (None, self.playing_seq)
+            or (self.job is not None and self.job[0] != self.playing_seq)
+            or any(q != self.playing_seq for q, _, _ in self.buffer)
+            or (self.reading is None and self.job is None and self.buffer)
+        ):
+            kept = [c for c in self.buffer if c[0] == self.playing_seq]
+            self.gen += 1
+            self.buffer = collections.deque(kept)
+            self.buffered = sum(len(c[2]) for c in kept)
+            self.job = None
+            nxt = self._next_track(self.track, manual=False)
+            if nxt is not None:
+                self._new_job(nxt)
+            self.lock.notify_all()
+
     def set_mode(self, mode):
         if mode not in MODES:
             raise BadRequest(f"mode must be one of {', '.join(MODES)}")
@@ -1633,24 +1687,7 @@ class Player:
             self.mode = mode
             if mode == "shuffle":
                 self._reshuffle(self.track)
-            # The reader may already have queued the track that the old mode chose next:
-            # drop it and let the new mode decide.
-            # Likewise when the reader has finished the current track and stopped.
-            if self.track is not None and (
-                self.reading not in (None, self.playing_seq)
-                or (self.job is not None and self.job[0] != self.playing_seq)
-                or any(q != self.playing_seq for q, _, _ in self.buffer)
-                or (self.reading is None and self.job is None and self.buffer)
-            ):
-                kept = [c for c in self.buffer if c[0] == self.playing_seq]
-                self.gen += 1
-                self.buffer = collections.deque(kept)
-                self.buffered = sum(len(c[2]) for c in kept)
-                self.job = None
-                nxt = self._next_track(self.track, manual=False)
-                if nxt is not None:
-                    self._new_job(nxt)
-                self.lock.notify_all()
+            self._replan()
         self.changed()
 
     def stop(self):
@@ -1728,6 +1765,7 @@ class Player:
             self.played = 0
             self.playback = "stopped"
             self.order = []
+            self.scope = None
         self.changed()
 
     def disc_loaded(self, disc_id, lengths, cd_tracks, meta):
@@ -1757,6 +1795,7 @@ class Player:
                 self.lengths = lengths
                 self.cd_tracks = cd_tracks
                 self.track = None
+                self.scope = None
                 self.played = 0
                 if self.mode == "shuffle":
                     self._reshuffle()
@@ -1796,6 +1835,7 @@ class Player:
             self.lengths = [0] * len(tracks)
             self.cd_tracks = []
             self.track = None
+            self.scope = None
             self.played = 0
             if self.mode == "shuffle":
                 self._reshuffle()

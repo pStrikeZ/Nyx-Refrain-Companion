@@ -930,6 +930,7 @@ class IntegrationTestCase(AioHTTPTestCase):
             "cover_url": None,
             "track_count": 40,
             "folder": "",
+            "scope": None,
             "folders": [
                 {"name": "", "first": 1, "tracks": 1},
                 {"name": "Album A", "first": 2, "tracks": 20},
@@ -944,14 +945,18 @@ class IntegrationTestCase(AioHTTPTestCase):
             if folder.available:
                 break
             await asyncio.sleep(0.05)
-        self.assertEqual(folder.options, ["/", "Album A", "Album A/Disc 2"])
-        self.assertEqual(folder.current_option, "/")
+        self.assertEqual(folder.options, ["All folders", "/", "Album A", "Album A/Disc 2"])
+        self.assertEqual(folder.current_option, "All folders")
         attrs = status.extra_state_attributes
         self.assertEqual((attrs["disc_kind"], attrs["track_count"], attrs["folder"]), ("data", 40, ""))
 
         await folder.async_select_option("Album A/Disc 2")
         self.assertEqual(folder.current_option, "Album A/Disc 2")
         self.assertEqual(self.coordinator.data["track"], 22)
+
+        await folder.async_select_option("All folders")
+        self.assertEqual(folder.current_option, "All folders")
+        self.assertEqual(self.coordinator.data["track"], 22)  # the track goes on
 
         await self.coordinator.async_close()
         try:

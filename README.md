@@ -21,7 +21,7 @@ NyxR Companion is a Home Assistant add-on and integration. The add-on plays audi
 ## Features
 
 - **CD player**: reads the disc directly, like a CD player does, and starts a track in about half a second. 16-bit 44.1 kHz audio reaches the speaker bit for bit. Track names and covers come from MusicBrainz, then CD-Text. Repeat all, repeat one and shuffle. Putting a disc in plays it, as on a CD player, even over Bluetooth or AirPlay (can be turned off).
-- **Data discs**: a CD, DVD or Blu-ray of music files (MP3, FLAC, AAC / M4A, Ogg, Opus, WAV, WMA and more) plays like an audio CD, folder by folder, with titles and covers from the files' tags. A **Folder** selector jumps to any folder on the disc.
+- **Data discs**: a CD, DVD or Blu-ray of music files (MP3, FLAC, AAC / M4A, Ogg, Opus, WAV, WMA and more) plays like an audio CD, folder by folder, with titles and covers from the files' tags. A **Folder** selector keeps playing to one folder of the disc.
 - **Bluetooth receiver**: phones and music players pair with it like with a speaker (no PIN), and it switches to Bluetooth by itself when one starts playing. Track info and play / pause / next / previous go over AVRCP.
 - **Pairing from the receiver's side**: for devices whose own pairing request does not get through (old iPods with a weak radio), pick them from a list of nearby devices.
 - **AirPlay relay**: shows up in the AirPlay list of iPhones, iPads and Macs, and passes what they play on to the speaker, with track info and cover. It switches to AirPlay by itself when a sender starts playing. On a HomePod this also keeps you clear of a tvOS 27 bug that stops its own Apple Music playback now and then (see [AirPlay](#airplay)).
@@ -53,7 +53,7 @@ Put a CD in and turn on **Stream**; turn on **Bluetooth pairing** and pair your 
 | Stream (switch) | Connects to the speaker and plays the selected source; off stops and remembers the CD position |
 | Source (select) | `cd`, `bluetooth` or `airplay`; only one streams at a time |
 | Play mode (select) | Repeat all, repeat one, shuffle (CD) |
-| Folder (select) | Data discs: the folder being played; picking one plays it from its first file |
+| Folder (select) | Data discs: the folder playing is kept to; picking one plays it from its first file and stays in it (shuffle too), *All folders* goes back to the whole disc |
 | Eject (button) | Stops and ejects the disc |
 | Status (sensor) | Drive and playback state; attributes carry the disc, track and errors |
 | Bluetooth pairing (switch) | Opens pairing for 3 minutes: phones can pair, and nearby devices are listed. Closes when something pairs |
@@ -92,7 +92,7 @@ Play, pause and track changes have no entities of their own: use the speaker's m
 ## Data discs
 
 - A disc without audio tracks is searched for music files: CD, DVD and Blu-ray media, ISO 9660 (with Joliet or Rock Ridge names) and UDF up to 2.60, including discs written in packets (what Windows calls "like a USB flash drive"). The disc is read directly, without mounting it.
-- Files play in order: those in the top folder first, then folder by folder, sorted by name with numbers in their natural order ("2" before "10"). Play modes work as on a CD, over the whole disc; **Folder** jumps to a folder.
+- Files play in order: those in the top folder first, then folder by folder, sorted by name with numbers in their natural order ("2" before "10"). Play modes work as on a CD, over the whole disc, or over the one folder picked with **Folder**.
 - Anything [FFmpeg](https://ffmpeg.org) decodes plays: MP3, AAC / M4A, FLAC, ALAC, Ogg Vorbis, Opus, WAV, AIFF, WMA, APE, WavPack and others. Everything is converted to 16-bit 44.1 kHz stereo for the speaker.
 - Titles, artists and albums come from the files' tags, read as each file comes up (so a full disc is ready at once); until then the file name is shown. The cover is the picture in the file, else a `cover` / `folder` / `front` image in its folder.
 - A file that cannot be decoded is skipped. Video discs (DVD-Video, Blu-ray movies), DVD-Audio and SACD are not data discs and do not play.

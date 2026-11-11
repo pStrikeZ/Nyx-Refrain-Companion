@@ -261,10 +261,15 @@ async def handle_post_folder(request: web.Request) -> web.Response:
     except Exception:
         data = {}
     folder = data.get("folder") if isinstance(data, dict) else None
+    if isinstance(data, dict) and "folder" in data and folder is None:
+        disc["scope"] = None  # the whole disc again; the track goes on
+        await server.broadcast()
+        return web.json_response(server.state)
     match = [f for f in disc.get("folders", []) if f.get("name") == folder]
     if not isinstance(folder, str) or not match:
         return web.json_response({"error": f"no folder {folder!r}"}, status=400)
     disc["folder"] = folder
+    disc["scope"] = folder
     server.state["track"] = match[0]["first"]
     server.state["position"] = 0.0
     server.state["streaming"] = True

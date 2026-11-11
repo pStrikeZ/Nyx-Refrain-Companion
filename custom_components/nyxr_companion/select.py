@@ -184,10 +184,12 @@ class NyxrCompanionPlayModeSelect(NyxrCompanionEntity, SelectEntity):
 
 
 ROOT_FOLDER = "/"  # how the disc's top folder is shown: an option cannot be empty
+ALL_FOLDERS = "All folders"  # no folder picked: playing goes over the whole disc
 
 
 class NyxrCompanionFolderSelect(NyxrCompanionEntity, SelectEntity):
-    """The folder being played on a data disc; picking one plays it from its first file."""
+    """The folder a data disc's playing is kept to: picking one plays it from its first
+    file and stays in it; "All folders" goes back to the whole disc."""
 
     _attr_translation_key = "folder"
     _attr_icon = "mdi:folder-music"
@@ -217,16 +219,16 @@ class NyxrCompanionFolderSelect(NyxrCompanionEntity, SelectEntity):
 
     @property
     def options(self) -> list[str]:
-        """Return the disc's folders."""
-        return list(self._folders())
+        """Return the disc's folders, and the whole disc."""
+        return [ALL_FOLDERS, *self._folders()]
 
     @property
     def current_option(self) -> str | None:
-        """Return the folder being played."""
-        folder = self._disc().get("folder")
-        if not isinstance(folder, str):
-            return None
-        return folder or ROOT_FOLDER
+        """Return the folder playing is kept to, or all of them."""
+        scope = self._disc().get("scope")
+        if not isinstance(scope, str):
+            return ALL_FOLDERS
+        return scope or ROOT_FOLDER
 
     @property
     def available(self) -> bool:
@@ -234,7 +236,10 @@ class NyxrCompanionFolderSelect(NyxrCompanionEntity, SelectEntity):
         return super().available and bool(self._folders())
 
     async def async_select_option(self, option: str) -> None:
-        """Play the picked folder."""
+        """Keep playing to the picked folder."""
+        if option == ALL_FOLDERS:
+            await self.coordinator.async_send_command("/api/folder", {"folder": None})
+            return
         folder = self._folders().get(option)
         if folder is not None:
             await self.coordinator.async_send_command("/api/folder", {"folder": folder})

@@ -24,7 +24,7 @@ Everything else (receiver, read speed, latency profile, Bluetooth and AirPlay na
 
 ## Data discs
 
-- A CD, DVD or Blu-ray of music files plays like an audio CD: the top folder's files first, then folder by folder. **Folder** jumps to a folder.
+- A CD, DVD or Blu-ray of music files plays like an audio CD: the top folder's files first, then folder by folder. **Folder** keeps playing to one folder (shuffle too); *All folders* goes back to the whole disc.
 - Titles and covers come from the files' tags as each file comes up; until then the file name is shown.
 - A file that cannot be decoded is skipped. Video discs do not play.
 
