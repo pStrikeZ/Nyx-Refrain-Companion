@@ -28,6 +28,7 @@ async def async_setup_entry(
             NyxrCompanionBluetoothPairSelect(coordinator),
             NyxrCompanionBluetoothForgetSelect(coordinator),
             NyxrCompanionPlayModeSelect(coordinator),
+            NyxrCompanionFolderSelect(coordinator),
             NyxrCompanionReadModeSelect(coordinator),
             NyxrCompanionLatencyProfileSelect(coordinator),
             NyxrCompanionReceiverSelect(coordinator),
@@ -180,6 +181,63 @@ class NyxrCompanionPlayModeSelect(NyxrCompanionEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         """Change the play mode."""
         await self.coordinator.async_send_command("/api/mode", {"mode": option})
+
+
+ROOT_FOLDER = "/"  # how the disc's top folder is shown: an option cannot be empty
+
+
+class NyxrCompanionFolderSelect(NyxrCompanionEntity, SelectEntity):
+    """The folder being played on a data disc; picking one plays it from its first file."""
+
+    _attr_translation_key = "folder"
+    _attr_icon = "mdi:folder-music"
+
+    def __init__(self, coordinator: NyxrCompanionCoordinator) -> None:
+        """Initialize the select entity."""
+        super().__init__(coordinator, "folder")
+
+    def _disc(self) -> dict:
+        """Return the data disc in the drive, or an empty dict."""
+        data = self.coordinator.data
+        disc = data.get("disc") if isinstance(data, dict) else None
+        if isinstance(disc, dict) and disc.get("kind") == "data":
+            return disc
+        return {}
+
+    def _folders(self) -> dict[str, str]:
+        """Return option label -> folder for the folders with music."""
+        folders = self._disc().get("folders")
+        if not isinstance(folders, list):
+            return {}
+        return {
+            str(f.get("name")) or ROOT_FOLDER: str(f.get("name"))
+            for f in folders
+            if isinstance(f, dict) and isinstance(f.get("name"), str)
+        }
+
+    @property
+    def options(self) -> list[str]:
+        """Return the disc's folders."""
+        return list(self._folders())
+
+    @property
+    def current_option(self) -> str | None:
+        """Return the folder being played."""
+        folder = self._disc().get("folder")
+        if not isinstance(folder, str):
+            return None
+        return folder or ROOT_FOLDER
+
+    @property
+    def available(self) -> bool:
+        """Return True while a data disc is in the drive."""
+        return super().available and bool(self._folders())
+
+    async def async_select_option(self, option: str) -> None:
+        """Play the picked folder."""
+        folder = self._folders().get(option)
+        if folder is not None:
+            await self.coordinator.async_send_command("/api/folder", {"folder": folder})
 
 
 class NyxrCompanionSettingSelect(NyxrCompanionSettingEntity, SelectEntity):

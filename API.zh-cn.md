@@ -16,6 +16,8 @@
   "drive": "ok",
   "disc": {
     "id": "MB disc id",
+    "kind": "audio",
+    "track_count": 1,
     "album": "专辑名",
     "artist": "专辑艺人",
     "cover_url": "https://coverartarchive.org/release/<mbid>/front-500",
@@ -77,8 +79,8 @@
 | 字段 | 取值 |
 |---|---|
 | `source` | 推哪一路：`cd`（默认）、`bluetooth` 或 `airplay`。同一时间只推一路；`streaming`、`playback`、`error` 都是所选这一路的 |
-| `drive` | `ok`（有碟）、`no_disc`、`tray_open`、`not_ready`（读盘中）、`not_audio`（没有音轨：数据盘、DVD，或目录连续 3 次读不出；拒绝播放）、`missing`（光驱不在，如 USB 掉线） |
-| `disc` | 只在 `drive == "ok"` 且 TOC 已读出时非 `null`。只含音轨：混合模式盘、CD-Extra 的数据轨不列出、不播放，`number` 从 1 连续编号。元数据先取 MusicBrainz，查不到用光盘的 CD-Text（没有封面），都没有时 `album` / `artist` / `cover_url` 为 `null`，曲名为 `Track01`、`Track02`… |
+| `drive` | `ok`（有碟）、`no_disc`、`tray_open`、`not_ready`（读盘中）、`not_audio`（没有可播放的内容：既没有音轨也没有音乐文件，或者盘读不出；拒绝播放）、`missing`（光驱不在，如 USB 掉线） |
+| `disc` | 只在 `drive == "ok"` 且光盘已读出时非 `null`。`kind` 为 `audio`（音乐 CD）或 `data`（存放音乐文件的数据盘，见[数据盘](#数据盘)）。音乐 CD 只含音轨：混合模式盘、CD-Extra 的数据轨不列出、不播放，`number` 从 1 连续编号。元数据先取 MusicBrainz，查不到用光盘的 CD-Text（没有封面），都没有时 `album` / `artist` / `cover_url` 为 `null`，曲名为 `Track01`、`Track02`… |
 | `streaming` | nyxr 是否正连着接收端 |
 | `playback` | `stopped`、`playing`、`paused` |
 | `track` | 当前曲目号（1 起），`stopped` 且没有选曲时为 `null` |
@@ -89,6 +91,41 @@
 | `bluetooth` | 蓝牙接收端，见下文。宿主机没有可用的 D-Bus、BlueZ 或适配器时 `available` 为 `false` |
 | `airplay` | AirPlay 接收端，见下文。shairport-sync 启动不了时 `available` 为 `false` |
 | `settings` | 可调设置，见下表 |
+
+### 数据盘
+
+没有音轨的光盘会被当成数据盘查找音乐文件（CD、DVD、BD；ISO 9660，含 Joliet、Rock Ridge 文件名，以及 2.60 及以下的 UDF）。盘上的音乐文件就是曲目，按播放顺序从 1 编号：先是根目录的文件，然后逐个文件夹，各自按文件名排序（「2」排在「10」前面）。没有音乐文件的盘是 `not_audio`。有音轨的盘一律按音乐 CD 播放。
+
+```json
+{
+  "id": "data-0123456789abcdef0123",
+  "kind": "data",
+  "label": "MP3 DISC",
+  "track_count": 412,
+  "album": "MP3 DISC",
+  "artist": null,
+  "cover_url": null,
+  "folder": "Album A",
+  "folders": [
+    {"name": "", "first": 1, "tracks": 2},
+    {"name": "Album A", "first": 3, "tracks": 12},
+    {"name": "Album A/Disc 2", "first": 15, "tracks": 9}
+  ],
+  "tracks": [
+    {"number": 3, "title": "曲名", "artist": "艺人", "album": "专辑", "length": 223.4, "cover_url": "file:///run/nyxr-companion/disc-cover-0123456789abcdef.jpg"}
+  ]
+}
+```
+
+| 字段 | 取值 |
+|---|---|
+| `label` | 光盘的卷标 |
+| `track_count` | 盘上音乐文件的总数。`track` 和 `/api/play` 的曲目号在全盘范围内编号 |
+| `folders` | 有音乐的文件夹，按播放顺序：`name`（从光盘根目录起的路径，根目录本身是 `""`）、`first`（其中第一首的曲目号）、`tracks`（曲目数） |
+| `folder` | 当前曲目所在的文件夹（还没播放时是第一个文件夹） |
+| `tracks` | 只列 `folder` 里的曲目：一张盘可能有几千个文件。`number` 是全盘曲目号 |
+
+文件的标签、时长和封面在快要播放到它时才读取。在那之前，`title` 是去掉扩展名的文件名，`album` 是文件夹名（根目录用卷标），`length` 为 `null`。`cover_url` 取文件内嵌的图片，没有就取同一文件夹里名为 `cover` / `folder` / `front` / `album` / `albumart` 的 `.jpg` / `.png`；它是加载项里的文件，给 nyxr 用。解码不了的文件会被跳过，`error` 里写明是哪个。
 
 ### 设置
 
@@ -145,6 +182,7 @@ AirPlay 2 接收端（shairport-sync），iPhone、iPad、Mac 可以往这里推
 | POST | `/api/mode` | `{"mode": "shuffle"}` | 设置播放模式 |
 | POST | `/api/eject` | `{}` | 断开推流并弹出光盘 |
 | POST | `/api/play` | `{"track": 3}` | 播放指定曲目（会打开推流）；不带 `track` 时等同继续播放 |
+| POST | `/api/folder` | `{"folder": "Album A"}` | 数据盘：从该文件夹的第一个文件开始播放（会打开推流）。文件夹不在 `folders` 里返回 `400`，没有数据盘返回 `409` |
 | POST | `/api/pause` | `{}` | 暂停（推流保持） |
 | POST | `/api/next` | `{}` | 下一首 |
 | POST | `/api/previous` | `{}` | 上一首（播放超过 3 秒时回到本曲开头） |

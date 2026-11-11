@@ -16,6 +16,8 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
   "drive": "ok",
   "disc": {
     "id": "MusicBrainz disc ID",
+    "kind": "audio",
+    "track_count": 1,
     "album": "Album",
     "artist": "Album artist",
     "cover_url": "https://coverartarchive.org/release/<mbid>/front-500",
@@ -77,8 +79,8 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
 | Field | Value |
 |---|---|
 | `source` | What is streamed: `cd` (default), `bluetooth` or `airplay`. One at a time; `streaming`, `playback` and `error` are the selected source's |
-| `drive` | `ok` (a disc is in), `no_disc`, `tray_open`, `not_ready` (reading the disc), `not_audio` (no audio tracks: a data disc, a DVD, or a table of contents that could not be read 3 times in a row; playing is refused), `missing` (no drive, e.g. unplugged) |
-| `disc` | Not `null` only while `drive == "ok"` and the table of contents has been read. Audio tracks only: the data tracks of mixed-mode and CD-Extra discs are neither listed nor played, and `number` counts from 1. Metadata comes from MusicBrainz, else the disc's CD-Text (no cover); without either, `album` / `artist` / `cover_url` are `null` and titles are `Track01`, `Track02`… |
+| `drive` | `ok` (a disc is in), `no_disc`, `tray_open`, `not_ready` (reading the disc), `not_audio` (nothing to play: no audio tracks and no music files, or a disc that could not be read; playing is refused), `missing` (no drive, e.g. unplugged) |
+| `disc` | Not `null` only while `drive == "ok"` and the disc has been read. `kind` is `audio` for an audio CD, `data` for a disc of music files (see [Data discs](#data-discs)). An audio CD lists its audio tracks only: the data tracks of mixed-mode and CD-Extra discs are neither listed nor played, and `number` counts from 1. Metadata comes from MusicBrainz, else the disc's CD-Text (no cover); without either, `album` / `artist` / `cover_url` are `null` and titles are `Track01`, `Track02`… |
 | `streaming` | Whether nyxr is connected to the receiver |
 | `playback` | `stopped`, `playing`, `paused` |
 | `track` | Current track number (from 1); `null` when stopped with no track selected |
@@ -90,13 +92,48 @@ Every request, the WebSocket included, needs `Authorization: Bearer <token>`; wi
 | `airplay` | The AirPlay receiver, see below. `available` is `false` when shairport-sync could not be started |
 | `settings` | Settings, see below |
 
+### Data discs
+
+A disc without audio tracks is searched for music files (CD, DVD or BD; ISO 9660 with Joliet or Rock Ridge names, and UDF up to 2.60). Its files are the tracks, numbered from 1 in playing order: the files of the top folder, then folder by folder, each sorted by name ("2" before "10"). A disc with no music files is `not_audio`. A disc with audio tracks is always played as an audio CD.
+
+```json
+{
+  "id": "data-0123456789abcdef0123",
+  "kind": "data",
+  "label": "MP3 DISC",
+  "track_count": 412,
+  "album": "MP3 DISC",
+  "artist": null,
+  "cover_url": null,
+  "folder": "Album A",
+  "folders": [
+    {"name": "", "first": 1, "tracks": 2},
+    {"name": "Album A", "first": 3, "tracks": 12},
+    {"name": "Album A/Disc 2", "first": 15, "tracks": 9}
+  ],
+  "tracks": [
+    {"number": 3, "title": "Title", "artist": "Artist", "album": "Album", "length": 223.4, "cover_url": "file:///run/nyxr-companion/disc-cover-0123456789abcdef.jpg"}
+  ]
+}
+```
+
+| Field | Value |
+|---|---|
+| `label` | The disc's volume label |
+| `track_count` | Music files on the disc. `track` and `/api/play` count over all of them |
+| `folders` | Folders that hold music, in playing order: `name` (path from the top of the disc, `""` for the top itself), `first` (number of its first track), `tracks` (how many) |
+| `folder` | The folder of the current track (the first folder before anything is played) |
+| `tracks` | The tracks of `folder` only: a disc may hold thousands. `number` is the track's number on the disc |
+
+A file's tags, length and picture are read when it is about to be played. Until then `title` is the file name without its extension, `album` the folder's name (the label for the top folder) and `length` is `null`. `cover_url` is the picture in the file, else a `cover` / `folder` / `front` / `album` / `albumart` `.jpg` / `.png` in its folder; it is a file in the add-on, for nyxr. A file that cannot be decoded is skipped, with `error` saying which.
+
 ### Settings
 
 Kept in `/data/settings.json` (the add-on's data folder) and changed with `POST /api/settings`.
 
 | Name | Value | Takes effect |
 |---|---|---|
-| `read_mode` | `raw` (default: sectors read directly), `raw_aligned` (each block lined up on the previous one, for drives whose reads are not sample-accurate), `paranoia_overlap`, `paranoia_full` (verified by cd-paranoia; 3–7 s to start after every jump) | At once: the current position is read again the new way |
+| `read_mode` | Audio CDs only. `raw` (default: sectors read directly), `raw_aligned` (each block lined up on the previous one, for drives whose reads are not sample-accurate), `paranoia_overlap`, `paranoia_full` (verified by cd-paranoia; 3–7 s to start after every jump) | At once: the current position is read again the new way |
 | `read_speed` | Whole number from 1 to 24 (times CD speed). Default 4: some slim drives drop off the SATA link when they spin up to full speed | At once |
 | `buffer_seconds` | 2–60, audio read ahead | At once |
 | `latency_profile` | `low`, `balanced`, `stable` | When the stream next starts |
@@ -145,6 +182,7 @@ An AirPlay 2 receiver (shairport-sync) that iPhones, iPads and Macs can play to;
 | POST | `/api/mode` | `{"mode": "shuffle"}` | Sets the play mode |
 | POST | `/api/eject` | `{}` | Stops the stream and ejects the disc |
 | POST | `/api/play` | `{"track": 3}` | Plays a track (turning the stream on); without `track`, resumes |
+| POST | `/api/folder` | `{"folder": "Album A"}` | Data discs: plays a folder from its first file (turning the stream on). `400` for a folder not in `folders`, `409` without a data disc |
 | POST | `/api/pause` | `{}` | Pauses (the stream stays connected) |
 | POST | `/api/next` | `{}` | Next track |
 | POST | `/api/previous` | `{}` | Previous track (back to the start of this one after 3 s) |

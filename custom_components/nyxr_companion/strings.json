@@ -85,6 +85,9 @@
       },
       "bluetooth_forget": {
         "name": "Forget paired device"
+      },
+      "folder": {
+        "name": "Folder"
       }
     },
     "number": {
@@ -124,7 +127,7 @@
           "missing": "Drive disconnected",
           "tray_open": "Tray open",
           "no_disc": "No disc",
-          "not_audio": "Not an audio CD",
+          "not_audio": "No music on the disc",
           "not_ready": "Reading disc",
           "stopped": "Stopped",
           "playing": "Playing",

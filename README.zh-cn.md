@@ -8,7 +8,7 @@
 
 <p align="center"><a href="README.md">English</a> | 简体中文</p>
 
-NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载项播放光驱里的音乐 CD，接收手机、播放器的蓝牙音频（A2DP），也是 iPhone、iPad、Mac 的 AirPlay 接收端；其中任何一路都经 Nyx Refrain 的命令行发送端 [nyxr](https://github.com/pStrikeZ/Nyx-Refrain) 推到 HomePod 等 AirPlay 2 音箱；集成在 Home Assistant 里控制这一切，用起来像一台无头 CD 机加蓝牙音箱。
+NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载项播放光驱里的音乐 CD 和存放音乐文件的数据盘，接收手机、播放器的蓝牙音频（A2DP），也是 iPhone、iPad、Mac 的 AirPlay 接收端；其中任何一路都经 Nyx Refrain 的命令行发送端 [nyxr](https://github.com/pStrikeZ/Nyx-Refrain) 推到 HomePod 等 AirPlay 2 音箱；集成在 Home Assistant 里控制这一切，用起来像一台无头 CD 机加蓝牙音箱。
 
 > 当前版本：0.2.0，nyxr 来自 Nyx Refrain 0.9.5。主要在 Home Assistant OS（amd64，Proxmox 虚拟机）+ HomePod mini 上测过，欢迎反馈其他环境下的情况。
 
@@ -21,6 +21,7 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 ## 功能
 
 - **CD 机**：像 CD 机一样直接读扇区，切歌约半秒出声；16 位 44.1 kHz 的音频逐位不变地送到音箱。曲名和封面先查 MusicBrainz，再用 CD-Text。全部循环、单曲循环、随机。像 CD 机一样，放进光盘就开始播放，蓝牙或 AirPlay 正在放也会被打断（可关）。
+- **数据盘**：存着音乐文件（MP3、FLAC、AAC / M4A、Ogg、Opus、WAV、WMA 等）的 CD、DVD、蓝光盘，像音乐 CD 一样逐个文件夹播放，曲名和封面取自文件标签；**文件夹** 选择器可以跳到盘上任意文件夹。
 - **蓝牙接收器**：手机、播放器像配对音箱一样配对（不需要配对码）；设备一开始播放就自动切到蓝牙。曲目信息和播放 / 暂停 / 切歌走 AVRCP。
 - **由接收端发起配对**：自己发起配对总是失败的设备（发射功率弱的老 iPod）可以从附近设备列表里选出来配对。
 - **AirPlay 中转**：出现在 iPhone、iPad、Mac 的 AirPlay 列表里，把它们播放的内容连同曲目信息和封面转推到音箱；发送端一开始播放就自动切到 AirPlay。用 HomePod 的话，还能避开 tvOS 27 上它自己播放 Apple Music 时不时停住的 bug（见 [AirPlay](#airplay)）。
@@ -52,6 +53,7 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 | 推流（开关） | 连接音箱并播放所选音源；关闭时停止，并记住 CD 的位置 |
 | 音源（选择） | `cd`、`bluetooth` 或 `airplay`，同一时间只推一路 |
 | 播放模式（选择） | 全部循环、单曲循环、随机（CD） |
+| 文件夹（选择） | 数据盘：当前播放的文件夹；选中一个就从它的第一个文件开始播放 |
 | 弹出（按钮） | 停止并弹出光盘 |
 | 状态（传感器） | 光驱和播放状态；属性里有光盘、曲目和错误信息 |
 | 蓝牙配对（开关） | 打开 3 分钟配对窗口：手机可以配对，同时列出附近的设备。有设备配上后自动关闭 |
@@ -85,7 +87,16 @@ NyxR Companion 由一个 Home Assistant 加载项和一个集成组成。加载�
 
 - 读取方式：**直读**（默认）直接读扇区；**直读 + 对齐** 把每块按上一块对齐，给读取位置不精确的光驱用；**cd-paranoia（overlap / full）** 校验每次读取，适合划伤的碟，但每次跳转后要 3–7 秒才出声。
 - 光驱默认限速 4x（**光驱转速**）：更安静，而且部分超薄光驱全速起转时会从 SATA 链路掉线。
-- 混合模式盘、CD-Extra 只播放音轨；数据盘和 DVD 拒绝播放。
+- 混合模式盘、CD-Extra 只播放音轨。
+
+## 数据盘
+
+- 没有音轨的光盘会被当成数据盘查找音乐文件：CD、DVD、蓝光介质，ISO 9660（含 Joliet、Rock Ridge 文件名）和 2.60 及以下的 UDF，包括按数据包写入的盘（Windows 里的「像 U 盘一样使用」）。直接读盘，不挂载。
+- 播放顺序：先是根目录的文件，然后逐个文件夹，按文件名排序，数字按大小排（「2」在「10」前面）。播放模式和 CD 一样，作用于整张盘；**文件夹** 用来跳到某个文件夹。
+- [FFmpeg](https://ffmpeg.org) 能解码的都能播：MP3、AAC / M4A、FLAC、ALAC、Ogg Vorbis、Opus、WAV、AIFF、WMA、APE、WavPack 等。全部转成 16 位 44.1 kHz 立体声送给音箱。
+- 曲名、艺人、专辑取自文件标签，播到哪个文件才读哪个（所以放进一张存满的盘也能马上开始）；在那之前显示文件名。封面取文件内嵌的图片，没有就取同一文件夹里的 `cover` / `folder` / `front` 图片。
+- 解码不了的文件会被跳过。影碟（DVD-Video、蓝光电影）、DVD-Audio、SACD 不是数据盘，不能播放。
+- 在虚拟机里，数据盘用模拟的 CD-ROM（把 ISO 镜像挂给虚拟机）也能读；音乐 CD 仍然需要下面说的直通。
 
 ## 在虚拟机里跑 Home Assistant OS
 

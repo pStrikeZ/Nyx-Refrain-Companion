@@ -250,6 +250,29 @@ async def handle_post_play(request: web.Request) -> web.Response:
     return web.json_response(server.state)
 
 
+async def handle_post_folder(request: web.Request) -> web.Response:
+    """Handle /api/folder command (data discs)."""
+    server: FakeServerState = request.app[FAKE_SERVER_KEY]
+    disc = server.state.get("disc")
+    if not isinstance(disc, dict) or disc.get("kind") != "data":
+        return web.json_response({"error": "no data disc"}, status=409)
+    try:
+        data = await request.json()
+    except Exception:
+        data = {}
+    folder = data.get("folder") if isinstance(data, dict) else None
+    match = [f for f in disc.get("folders", []) if f.get("name") == folder]
+    if not isinstance(folder, str) or not match:
+        return web.json_response({"error": f"no folder {folder!r}"}, status=400)
+    disc["folder"] = folder
+    server.state["track"] = match[0]["first"]
+    server.state["position"] = 0.0
+    server.state["streaming"] = True
+    server.state["playback"] = "playing"
+    await server.broadcast()
+    return web.json_response(server.state)
+
+
 async def handle_post_pause(request: web.Request) -> web.Response:
     """Handle /api/pause command."""
     server: FakeServerState = request.app[FAKE_SERVER_KEY]
@@ -478,6 +501,7 @@ def create_app(
     app.router.add_post("/api/mode", handle_post_mode)
     app.router.add_post("/api/eject", handle_post_eject)
     app.router.add_post("/api/play", handle_post_play)
+    app.router.add_post("/api/folder", handle_post_folder)
     app.router.add_post("/api/pause", handle_post_pause)
     app.router.add_post("/api/next", handle_post_next)
     app.router.add_post("/api/previous", handle_post_previous)

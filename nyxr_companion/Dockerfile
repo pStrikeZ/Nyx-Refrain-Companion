@@ -6,6 +6,7 @@ FROM mikebrady/shairport-sync:5.6.2@sha256:b6192daba080e2511716490fa104a0bf96ebb
 
 RUN apk add --no-cache \
         ca-certificates \
+        ffmpeg \
         libcdio \
         libcdio-paranoia \
         libdiscid \
@@ -14,6 +15,18 @@ RUN apk add --no-cache \
         py3-dbus-next \
         py3-musicbrainzngs \
         python3
+
+# The image has its own small build of FFmpeg's libraries in /usr/local/lib for
+# shairport-sync, which the loader finds before Alpine's: ffmpeg and ffprobe are started
+# with theirs in front.
+RUN set -eu; \
+    for tool in ffmpeg ffprobe; do \
+        printf '#!/bin/sh\nLD_LIBRARY_PATH=/usr/lib exec /usr/bin/%s "$@"\n' "$tool" \
+            > "/usr/local/bin/$tool"; \
+        chmod 755 "/usr/local/bin/$tool"; \
+    done; \
+    ffmpeg -version > /dev/null; \
+    ffmpeg -v error -protocols | grep -qx ' *subfile'
 
 # nyxr from the Nyx Refrain release (a static build; only the binary is taken from the
 # package, checked against the release's SHA256SUMS). 0.9.5 added --input-live and
@@ -32,7 +45,7 @@ RUN set -eu; \
     apk del .fetch
 # Only our AirPlay receiver is advertised (the image also has ssh / sftp services).
 RUN rm -f /etc/avahi/services/*
-COPY nyxr_companion.py /opt/nyxr-companion/nyxr_companion.py
+COPY nyxr_companion.py discfs.py /opt/nyxr-companion/
 
 # The daemon starts avahi, nqptp and shairport-sync itself (the image's run.sh would start
 # a D-Bus system bus where the host's is mounted).

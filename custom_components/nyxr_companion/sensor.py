@@ -89,7 +89,9 @@ class NyxrCompanionStatusSensor(NyxrCompanionEntity, SensorEntity):
         if disc is not None:
             raw_tracks = disc.get("tracks")
             if isinstance(raw_tracks, list):
-                track_count = len(raw_tracks)
+                # A data disc lists only the folder being played; the count is the disc's.
+                count = disc.get("track_count")
+                track_count = count if isinstance(count, int) else len(raw_tracks)
                 for item in raw_tracks:
                     if isinstance(item, dict):
                         t_num = item.get("number")
@@ -113,6 +115,8 @@ class NyxrCompanionStatusSensor(NyxrCompanionEntity, SensorEntity):
             "track_title": track_title,
             "track_artist": track_artist,
             "track_count": track_count,
+            "disc_kind": disc.get("kind") if disc else None,
+            "folder": disc.get("folder") if disc else None,
             "position": data.get("position"),
             "source": data.get("source"),
             "mode": data.get("mode"),

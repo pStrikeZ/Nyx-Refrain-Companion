@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""NyxR Companion: plays an audio CD from a local drive through nyxr to an AirPlay 2
-receiver, and works as a Bluetooth receiver (A2DP sink) through the host's BlueZ and as
-an AirPlay 2 receiver through shairport-sync.
+"""NyxR Companion: plays an audio CD, or the music files of a data disc (CD, DVD, BD),
+from a local drive through nyxr to an AirPlay 2 receiver, and works as a Bluetooth receiver
+(A2DP sink) through the host's BlueZ and as an AirPlay 2 receiver through shairport-sync.
 
     CD drive ──libcdio──▶ ring buffer ──PCM──▶ nyxr --source stdin ──AirPlay 2──▶ speaker
+    data disc ──discfs──▶ ffmpeg ──▶ ring buffer ──PCM──▶ nyxr (as above)
     phone ──A2DP──▶ BlueZ + PulseAudio ──parec──▶ nyxr --source stdin --input-live ──▶ speaker
     iPhone ──AirPlay 2 (buffered)──▶ shairport-sync ──PCM──▶ nyxr --input-live ──▶ speaker
 
@@ -17,7 +18,7 @@ Control surfaces:
   mode, eject and status.
 
 Threads: the asyncio loop runs the HTTP server, MPRIS and the drive monitor; one reader
-thread runs cd-paranoia for a track at a time and fills the buffer; one writer thread feeds
+thread reads (or decodes) a track at a time and fills the buffer; one writer thread feeds
 nyxr (which pulls at the receiver's pace), writing silence while paused or starved.
 """
 
@@ -26,6 +27,7 @@ import base64
 import collections
 import ctypes
 import fcntl
+import hashlib
 import json
 import logging
 import os
@@ -34,7 +36,10 @@ import re
 import secrets
 import shlex
 import signal
+import struct
 import subprocess
+import sys
+import tempfile
 import threading
 import time
 
@@ -45,6 +50,9 @@ from dbus_next.aio import MessageBus
 from dbus_next.auth import AuthExternal
 from dbus_next.errors import DBusError
 from dbus_next.service import ServiceInterface, dbus_property, method, signal as dbus_signal
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import discfs  # noqa: E402
 
 log = logging.getLogger("nyxr-companion")
 
@@ -64,6 +72,8 @@ CDROM_SELECT_SPEED = 0x5322
 SG_IO = 0x2285  # scsi/sg.h
 CDROM_DRIVE_STATUS = 0x5326
 CDROM_LOCKDOOR = 0x5329
+CDROMMULTISESSION = 0x5310
+CDROM_LAST_WRITTEN = 0x5395
 CDSL_CURRENT = 0x7FFFFFFF
 DRIVE_STATUS = {1: "no_disc", 2: "tray_open", 3: "not_ready", 4: "ok"}
 
@@ -105,6 +115,8 @@ RUN_DIR = env("NYXR_COMPANION_RUN", "/run/nyxr-companion")
 # Testing only: "223.4,183.2,..." fakes a disc with these track lengths and generates tones
 # instead of reading the drive.
 FAKE_DISC = env("NYXR_COMPANION_FAKE_DISC", "")
+# Testing: a directory standing in for a data disc in the drive.
+FAKE_DATA_DISC = env("NYXR_COMPANION_FAKE_DATA_DISC", "")
 
 
 class BadRequest(Exception):
@@ -313,7 +325,7 @@ def discover_receivers():
 # Drive access
 
 def drive_status():
-    if FAKE_DISC:
+    if FAKE_DISC or FAKE_DATA_DISC:
         return "ok"
     try:
         fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
@@ -373,7 +385,7 @@ def limit_speed():
     """Caps the drive's spin speed. Some slim drives drop off the SATA link when they spin
     up to full speed (24x), and drives forget the cap when they reset or change discs, so
     this is repeated before anything that may spin it up."""
-    if FAKE_DISC:
+    if FAKE_DISC or FAKE_DATA_DISC:
         return
     try:
         fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
@@ -391,7 +403,7 @@ def limit_speed():
 
 
 def eject_disc():
-    if FAKE_DISC:
+    if FAKE_DISC or FAKE_DATA_DISC:
         return
     fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
     try:
@@ -405,7 +417,7 @@ def spin_down():
     """Stops the disc spinning (STOP UNIT). The drive's own standby timer never runs out:
     the status polling keeps it idle, still spinning, for as long as a disc is in. The next
     read spins it up again by itself (about 3 seconds)."""
-    if FAKE_DISC:
+    if FAKE_DISC or FAKE_DATA_DISC:
         return
     fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
     try:
@@ -465,6 +477,8 @@ def read_toc():
     """Returns (disc id, [track length in sectors], [CD track number]) for the audio tracks
     only: data tracks (mixed-mode CDs, CD-Extra) are left out, never played. Raises NotAudio
     for a disc without audio tracks."""
+    if FAKE_DATA_DISC:
+        raise NotAudio()
     if FAKE_DISC:
         lengths = [round(float(s) * SECTORS_PER_SECOND) for s in FAKE_DISC.split(",")]
         return "fake-" + "-".join(map(str, lengths)), lengths, list(range(1, len(lengths) + 1))
@@ -790,6 +804,332 @@ class TrackReader:
 
 
 # ---------------------------------------------------------------------------------------
+# Data discs: music files on a CD, DVD or BD
+
+# What ffmpeg is asked to play, by extension: the disc is not searched for anything else.
+AUDIO_EXTENSIONS = {
+    "mp3", "mp2", "m4a", "m4b", "aac", "flac", "ogg", "oga", "opus", "wav", "wma", "ape",
+    "wv", "aif", "aiff", "alac", "mka", "ac3", "dts", "tta", "mpc", "dsf", "dff", "tak", "spx",
+}
+COVER_STEMS = ("cover", "folder", "front", "album", "albumart")
+COVER_EXTENSIONS = ("jpg", "jpeg", "png")
+MAX_COVER_BYTES = 16 << 20
+PROBE_TIMEOUT = 30
+
+
+def _natural(text):
+    """Sort key that puts "2" before "10"."""
+    return [(0, int(p)) if p.isdigit() else (1, p.casefold()) for p in re.split(r"(\d+)", text)]
+
+
+def _split(path):
+    folder, _, name = path.rpartition("/")
+    return folder, name
+
+
+class DataDisc:
+    """The music files of a data disc, in playing order: folder by folder, by name."""
+
+    def __init__(self, device, volume):
+        self.device = device  # None with FAKE_DATA_DISC
+        self.volume = volume
+        self.lock = threading.Lock()  # one read of the disc at a time from this process
+        self.label = volume.label if volume else os.path.basename(FAKE_DATA_DISC.rstrip("/"))
+        files = volume.files if volume else self._fake_files()
+        music, self.covers = [], {}
+        for f in files:
+            folder, name = _split(f.path)
+            stem, _, ext = name.rpartition(".")
+            ext = ext.lower()
+            if ext in AUDIO_EXTENSIONS and stem and f.size > 0:
+                music.append(f)
+            elif ext in COVER_EXTENSIONS and stem.lower() in COVER_STEMS \
+                    and 0 < f.size <= MAX_COVER_BYTES:
+                rank = COVER_STEMS.index(stem.lower())
+                if folder not in self.covers or rank < self.covers[folder][0]:
+                    self.covers[folder] = (rank, f)
+        music.sort(key=lambda f: ([_natural(p) for p in _split(f.path)[0].split("/")],
+                                  _natural(_split(f.path)[1])))
+        self.tracks = music
+        digest = hashlib.sha1(self.label.encode())
+        for f in music:
+            digest.update(f"{f.path}\0{f.size}\0".encode())
+        self.id = "data-" + digest.hexdigest()[:20]
+
+    @staticmethod
+    def _fake_files():
+        files = []
+        for root, _, names in os.walk(FAKE_DATA_DISC):
+            for name in names:
+                full = os.path.join(root, name)
+                size = os.path.getsize(full)
+                rel = os.path.relpath(full, FAKE_DATA_DISC).replace(os.sep, "/")
+                files.append(discfs.DiscFile(rel, size, [(0, size)]))
+        return files
+
+    def where(self, f):
+        """(path, offset, size) of the file as one run of bytes ffmpeg can open itself, or
+        None if it lies in pieces and has to be handed over."""
+        if self.volume is None:
+            return os.path.join(FAKE_DATA_DISC, f.path), 0, f.size
+        span = f.span()
+        return None if span is None else (DEVICE, span[0], span[1])
+
+    def read(self, f, offset=0, size=None):
+        if self.volume is None:
+            with open(os.path.join(FAKE_DATA_DISC, f.path), "rb") as src:
+                src.seek(offset)
+                return src.read(f.size if size is None else size)
+        with self.lock:
+            return self.volume.read(f, offset, size)
+
+    def close(self):
+        if self.device is not None:
+            self.device.close()
+
+
+def scan_data_disc():
+    """The disc's music files, or None if it has none (or no file system we read)."""
+    if FAKE_DATA_DISC:
+        disc = DataDisc(None, None)
+        return disc if disc.tracks else None
+    try:
+        device = discfs.Device(DEVICE)
+    except OSError as e:
+        log.warning("cannot open %s: %s", DEVICE, e)
+        return None
+    session_start, last_block = 0, None
+    try:
+        # struct cdrom_multisession: the last session's first block, asked for as an LBA.
+        arg = bytearray(struct.pack("<iBB2x", 0, 0, 1))
+        fcntl.ioctl(device.fd, CDROMMULTISESSION, arg)
+        start, multisession = struct.unpack_from("<iB", arg)
+        if multisession and start > 0:
+            session_start = start
+    except OSError:
+        pass
+    try:
+        # Discs written in packets keep their newest table at the last block written.
+        arg = bytearray(struct.pack("l", 0))
+        fcntl.ioctl(device.fd, CDROM_LAST_WRITTEN, arg)
+        last = struct.unpack("l", arg)[0]
+        if 0 < last < device.blocks:
+            last_block = last
+    except OSError:
+        pass
+    try:
+        volume = discfs.open_volume(device, session_start, last_block)
+    except discfs.NotRecognized as e:
+        log.info("no file system on the disc: %s", e)
+        device.close()
+        return None
+    disc = DataDisc(device, volume)
+    log.info("%s volume %r: %d files, %d of them music", volume.kind, volume.label,
+             len(volume.files), len(disc.tracks))
+    if not disc.tracks:
+        disc.close()
+        return None
+    return disc
+
+
+def _ffmpeg_input(disc, f):
+    """ffmpeg's input arguments for a file, and whether it reads the file from stdin."""
+    where = disc.where(f)
+    if where is None:
+        return ["-i", "pipe:0"], True
+    path, offset, size = where
+    if offset == 0 and disc.volume is None:
+        return ["-i", "file:" + path], False
+    # ffmpeg reads the file's bytes off the drive itself, and can seek in them.
+    return ["-i", f"subfile,,start,{offset},end,{offset + size},,:{path}"], False
+
+
+def _feed(disc, f, proc):
+    """Hands a file that lies in pieces to ffmpeg's stdin."""
+    def run():
+        offset = 0
+        try:
+            while offset < f.size:
+                data = disc.read(f, offset, 256 << 10)
+                if not data:
+                    break
+                proc.stdin.write(data)
+                offset += len(data)
+        except (OSError, ValueError):
+            pass  # ffmpeg is done with it, or was killed
+        finally:
+            try:
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _run_ffmpeg(disc, f, tool, before, after, limit):
+    """Runs ffprobe / ffmpeg on a file; returns its stdout (up to `limit` bytes) or None."""
+    source, piped = _ffmpeg_input(disc, f)
+    cmd = [tool, "-v", "error", *before, *source, *after]
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if piped else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    except OSError as e:
+        log.warning("%s: %s", tool, e)
+        return None
+    if piped:
+        _feed(disc, f, proc)
+    timer = threading.Timer(PROBE_TIMEOUT, proc.kill)
+    timer.start()
+    try:
+        out = proc.stdout.read(limit + 1)
+        if len(out) > limit:
+            proc.kill()
+        proc.stdout.close()
+        proc.wait()
+    finally:
+        timer.cancel()
+    return out if proc.returncode == 0 and len(out) <= limit else None
+
+
+def probe_file(disc, f):
+    """Tags and length of a music file: {"title", "artist", "album", "length", "picture"}."""
+    out = _run_ffmpeg(disc, f, "ffprobe", [], [
+        "-show_entries",
+        "format=duration:format_tags:stream=codec_type,duration:stream_tags"
+        ":stream_disposition=attached_pic",
+        "-of", "json",
+    ], 1 << 20)
+    try:
+        info = json.loads(out) if out else {}
+    except ValueError:
+        info = {}
+    tags = {}
+    streams = info.get("streams") or []
+    # Ogg keeps its tags on the stream; everything else on the file.
+    for holder in [s for s in streams if s.get("codec_type") == "audio"][:1] + [info.get("format") or {}]:
+        for key, value in (holder.get("tags") or {}).items():
+            if isinstance(value, str) and value.strip():
+                tags[key.lower()] = value.strip()
+    length = None
+    for holder in [info.get("format") or {}] + streams:
+        try:
+            length = float(holder.get("duration"))
+        except (TypeError, ValueError):
+            continue
+        if length > 0:
+            break
+        length = None
+    return {
+        "title": tags.get("title"),
+        "artist": tags.get("artist") or tags.get("album_artist"),
+        "album": tags.get("album"),
+        "length": round(length, 1) if length else None,
+        "picture": any(
+            s.get("codec_type") == "video" and (s.get("disposition") or {}).get("attached_pic")
+            for s in streams
+        ),
+    }
+
+
+def embedded_picture(disc, f):
+    return _run_ffmpeg(disc, f, "ffmpeg", ["-nostdin"], [
+        "-an", "-map", "0:v:0", "-frames:v", "1", "-c:v", "copy", "-f", "image2pipe", "pipe:1",
+    ], MAX_COVER_BYTES)
+
+
+def save_cover(data):
+    """Keeps a picture where nyxr can fetch it; returns its URL, or None if it is neither
+    JPEG nor PNG. The same picture (every track of an album has it) is kept once."""
+    if not data:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        ext = "png"
+    elif data[:3] == b"\xff\xd8\xff":
+        ext = "jpg"
+    else:
+        return None
+    path = os.path.join(RUN_DIR, f"disc-cover-{hashlib.sha1(data).hexdigest()[:16]}.{ext}")
+    if not os.path.exists(path):
+        os.makedirs(RUN_DIR, exist_ok=True)
+        with open(path, "wb") as out:
+            out.write(data)
+    return "file://" + path
+
+
+def drop_covers():
+    try:
+        names = os.listdir(RUN_DIR)
+    except OSError:
+        return
+    for name in names:
+        if name.startswith("disc-cover-"):
+            try:
+                os.unlink(os.path.join(RUN_DIR, name))
+            except OSError:
+                pass
+
+
+class FileReader:
+    """Decodes one music file (from an offset to its end) to s16le 44.1 kHz stereo PCM with
+    ffmpeg. Same shape as TrackReader."""
+
+    def __init__(self, disc, f, offset):
+        self.name = f.path
+        self.offset = offset
+        self.produced = 0
+        self.proc = None
+        self.error = None
+        self.log = tempfile.TemporaryFile()
+        source, piped = _ffmpeg_input(disc, f)
+        seek = ["-ss", f"{offset / SECTORS_PER_SECOND:.3f}"] if offset else []
+        cmd = ["ffmpeg", "-nostdin", "-v", "error", *seek, *source,
+               "-vn", "-sn", "-dn", "-map", "0:a:0",
+               "-f", "s16le", "-ar", "44100", "-ac", "2", "pipe:1"]
+        try:
+            self.proc = subprocess.Popen(
+                cmd, stdin=subprocess.PIPE if piped else subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=self.log, bufsize=0,
+            )
+        except OSError as e:
+            self.error = f"ffmpeg: {e}"
+            return
+        if piped:
+            _feed(disc, f, self.proc)
+
+    def read(self, size):
+        if self.proc is None:
+            return b""
+        data = self.proc.stdout.read(size)
+        self.produced += len(data)
+        return data
+
+    def finish(self):
+        """Returns an error string if the file could not be played, else None."""
+        if self.proc is None:
+            return self.error
+        code = self.proc.wait()
+        self.proc.stdout.close()
+        self.log.seek(0)
+        err = self.log.read().decode(errors="replace").strip()
+        self.log.close()
+        # Nothing at all from the start of a file: not something ffmpeg plays. (A file that
+        # breaks off later has played what there was; go on to the next.)
+        if self.produced == 0 and self.offset == 0:
+            return f"cannot play {self.name}: {err[-300:] or f'ffmpeg exited with {code}'}"
+        if code != 0:
+            log.warning("%s: %s", self.name, err[-300:] or f"ffmpeg exited with {code}")
+        return None
+
+    def kill(self):
+        if self.proc is not None:
+            if self.proc.poll() is None:
+                self.proc.kill()
+                self.proc.wait()
+            self.proc.stdout.close()
+        self.log.close()
+
+
+# ---------------------------------------------------------------------------------------
 # Player
 
 class Player:
@@ -801,8 +1141,9 @@ class Player:
 
         self.drive = "missing"
         self.disc = None  # {"id", "album", "artist", "cover_url", "tracks": [...]}
-        self.lengths = []  # sectors per track
+        self.lengths = []  # sectors per track (0: not known yet, on a data disc)
         self.cd_tracks = []  # CD track number of each (audio) track
+        self.data = None  # DataDisc: the tracks are its music files rather than CD tracks
         self.mode = "repeat_all"
         self.streaming = False
         self.playback = "stopped"
@@ -859,7 +1200,7 @@ class Player:
             return {
                 "source": self.source,
                 "drive": self.drive,
-                "disc": self.disc,
+                "disc": self._public_disc(),
                 # The selected source's stream and playback.
                 "streaming": other["streaming"] if other else self.streaming,
                 "playback": other["playback"] if other else self.playback,
@@ -878,10 +1219,43 @@ class Player:
             if self.disc is None or self.track is None:
                 return None
             info = dict(self.disc["tracks"][self.track - 1])
-            info["album"] = self.disc["album"]
+            # A data disc's files each have their own album and picture.
+            info["album"] = info.get("album") or self.disc["album"]
             info["album_artist"] = self.disc["artist"]
-            info["cover_url"] = self.disc["cover_url"]
+            info["cover_url"] = info.get("cover_url") or self.disc["cover_url"]
             return info
+
+    def _folder(self):
+        """The folder being played on a data disc (the first one before anything is)."""
+        tracks = self.disc["tracks"]
+        return tracks[(self.track or 1) - 1]["folder"]
+
+    def _public_disc(self):
+        """The disc as the API shows it. A data disc may hold thousands of files, so only
+        the tracks of the folder being played are listed, with the folders to go to."""
+        disc = self.disc
+        if disc is None:
+            return None
+        if self.data is None:
+            return dict(disc, track_count=len(disc["tracks"]))
+        folder = self._folder()
+        folders = []
+        for t in disc["tracks"]:
+            if not folders or folders[-1]["name"] != t["folder"]:
+                folders.append({"name": t["folder"], "first": t["number"], "tracks": 0})
+            folders[-1]["tracks"] += 1
+        hidden = ("folder", "file", "probed")
+        return dict(
+            disc,
+            track_count=len(disc["tracks"]),
+            folder=folder,
+            folders=folders,
+            tracks=[
+                {k: v for k, v in t.items() if k not in hidden}
+                for t in disc["tracks"]
+                if t["folder"] == folder
+            ],
+        )
 
     # -- planning (call with the lock held) ----------------------------------------------
 
@@ -966,7 +1340,7 @@ class Player:
     def play(self, track=None):
         with self.lock:
             if self.drive == "not_audio":
-                raise Conflict("not an audio CD")
+                raise Conflict("no music on this disc")
             if self.disc is None:
                 raise Conflict("no disc")
             if track is not None and not 1 <= track <= self._count():
@@ -993,6 +1367,18 @@ class Player:
             log.warning("playing the inserted disc: %s", e)
         else:
             log.info("disc inserted, playing it")
+
+    def play_folder(self, folder):
+        """Plays a data disc's folder from its first file."""
+        if not isinstance(folder, str):
+            raise BadRequest('"folder" must be the name of a folder on the disc')
+        with self.lock:
+            if self.disc is None or self.data is None:
+                raise Conflict("no data disc")
+            first = next((t["number"] for t in self.disc["tracks"] if t["folder"] == folder), None)
+        if first is None:
+            raise BadRequest(f"no folder {folder!r} with music on the disc")
+        self.play(first)
 
     def pause(self):
         with self.lock:
@@ -1035,7 +1421,9 @@ class Player:
             if self.track is None:
                 return
             length = self.lengths[self.track - 1]
-            offset = max(0, min(int(seconds * SECTORS_PER_SECOND), length - 1))
+            offset = max(0, int(seconds * SECTORS_PER_SECOND))
+            if length:
+                offset = min(offset, length - 1)
             self._jump(self.track, offset)
         self.changed()
 
@@ -1087,6 +1475,8 @@ class Player:
             while self.reading is not None and time.monotonic() < deadline:
                 self.lock.wait(0.1)
             CDDA.close()
+            if self.data is not None:
+                self.data.close()
         try:
             eject_disc()
         except OSError as e:
@@ -1133,6 +1523,10 @@ class Player:
             self.disc = None
             self.lengths = []
             self.cd_tracks = []
+            if self.data is not None:
+                self.data.close()
+                self.data = None
+                drop_covers()
             self.track = None
             self.played = 0
             self.playback = "stopped"
@@ -1156,6 +1550,7 @@ class Player:
             same = self.disc is not None and self.disc["id"] == disc_id
             self.disc = {
                 "id": disc_id,
+                "kind": "audio",
                 "album": (meta or {}).get("album"),
                 "artist": (meta or {}).get("artist"),
                 "cover_url": (meta or {}).get("cover_url"),
@@ -1168,6 +1563,73 @@ class Player:
                 self.played = 0
                 if self.mode == "shuffle":
                     self._reshuffle()
+        self.changed()
+
+    def data_loaded(self, data):
+        """A data disc with music files on it is in the drive. Titles come from the file
+        names until a file is about to be played: reading every file's tags would take
+        minutes on a full disc."""
+        tracks = []
+        for i, f in enumerate(data.tracks):
+            folder, name = _split(f.path)
+            tracks.append(
+                {
+                    "number": i + 1,
+                    "title": name.rpartition(".")[0],
+                    "artist": None,
+                    "album": folder.rpartition("/")[2] or data.label or None,
+                    "length": None,
+                    "cover_url": None,
+                    "folder": folder,
+                    "file": f.path,
+                    "probed": False,
+                }
+            )
+        with self.lock:
+            self.data = data
+            self.disc = {
+                "id": data.id,
+                "kind": "data",
+                "label": data.label,
+                "album": data.label or None,
+                "artist": None,
+                "cover_url": None,
+                "tracks": tracks,
+            }
+            self.lengths = [0] * len(tracks)
+            self.cd_tracks = []
+            self.track = None
+            self.played = 0
+            if self.mode == "shuffle":
+                self._reshuffle()
+        self.changed()
+
+    def _describe(self, data, track, epoch):
+        """Reads a file's tags, length and picture before it is played (reader thread)."""
+        with self.lock:
+            if self.data is not data or self.disc["tracks"][track - 1]["probed"]:
+                return
+        f = data.tracks[track - 1]
+        info = probe_file(data, f)
+        cover = None
+        try:
+            if info["picture"]:
+                cover = save_cover(embedded_picture(data, f))
+            if cover is None and _split(f.path)[0] in data.covers:
+                cover = save_cover(data.read(data.covers[_split(f.path)[0]][1]))
+        except OSError as e:
+            log.warning("cover of %s: %s", f.path, e)
+        with self.lock:
+            if self.data is not data or self.disc_epoch != epoch:
+                return
+            t = self.disc["tracks"][track - 1]
+            t["probed"] = True
+            for key in ("title", "artist", "album", "length"):
+                if info[key]:
+                    t[key] = info[key]
+            t["cover_url"] = cover
+            if info["length"]:
+                self.lengths[track - 1] = int(info["length"] * SECTORS_PER_SECOND)
         self.changed()
 
     # -- nyxr ---------------------------------------------------------------------------
@@ -1249,10 +1711,16 @@ class Player:
                 seq, track, offset = self.job
                 self.job = None
                 self.reading = seq
-                length = self.lengths[track - 1]
-                cd_track = self.cd_tracks[track - 1]
+                data = self.data
                 epoch = self.disc_epoch
-            reader = TrackReader(cd_track, offset, length, epoch)
+                if data is None:
+                    length = self.lengths[track - 1]
+                    cd_track = self.cd_tracks[track - 1]
+            if data is not None:
+                self._describe(data, track, epoch)
+                reader = FileReader(data, data.tracks[track - 1], offset)
+            else:
+                reader = TrackReader(cd_track, offset, length, epoch)
             carry = b""
             cancelled = False
             while True:
@@ -2999,6 +3467,7 @@ def make_app(sources, token):
     app.router.add_post("/api/mode", command(lambda b: player.set_mode(b.get("mode"))))
     app.router.add_post("/api/eject", command(lambda b: player.eject()))
     app.router.add_post("/api/play", command(play))
+    app.router.add_post("/api/folder", command(lambda b: player.play_folder(b.get("folder"))))
     app.router.add_post("/api/pause", command(lambda b: sources.call("pause")))
     app.router.add_post("/api/next", command(lambda b: sources.call("next")))
     app.router.add_post("/api/previous", command(lambda b: sources.call("previous")))
@@ -3047,6 +3516,26 @@ NOT_AUDIO = object()
 SPIN_DOWN_SECONDS = 60
 
 
+async def load_data_disc(player, inserted):
+    """The disc has no audio tracks: looks for music files on it. Returns what
+    monitor_drive keeps as `loaded`."""
+    loop = asyncio.get_running_loop()
+    try:
+        data = await loop.run_in_executor(None, scan_data_disc)
+    except Exception:
+        log.exception("reading the disc's files failed")
+        data = None
+    if data is None:
+        log.info("no music on the disc")
+        return NOT_AUDIO
+    log.info("data disc %r: %d music files", data.label, len(data.tracks))
+    player.set_drive("ok")
+    player.data_loaded(data)
+    if inserted and SETTINGS["cd_auto_play"]:
+        loop.run_in_executor(None, player.auto_play)
+    return data.id
+
+
 async def monitor_drive(player):
     loop = asyncio.get_running_loop()
     loaded = None  # disc id we have read the TOC for, or NOT_AUDIO
@@ -3072,13 +3561,14 @@ async def monitor_drive(player):
             try:
                 disc_id, lengths, cd_tracks = await loop.run_in_executor(None, read_toc)
             except NotAudio:
-                log.info("not an audio CD")
-                loaded = NOT_AUDIO
+                loaded = await load_data_disc(player, emptied)
+                emptied = False
             except Exception as e:  # libdiscid raises its own error types
                 failures += 1
                 log.warning("reading the TOC failed (%d): %s", failures, e)
-                if failures >= 3:
-                    loaded = NOT_AUDIO  # stop retrying until the disc changes
+                if failures >= 3:  # not a CD (DVD, BD), or one that cannot be read
+                    loaded = await load_data_disc(player, emptied)
+                    emptied = False
             else:
                 loaded = disc_id
                 log.info("disc %s, audio tracks %s", disc_id, cd_tracks)

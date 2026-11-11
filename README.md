@@ -8,7 +8,7 @@
 
 <p align="center">English | <a href="README.zh-cn.md">简体中文</a></p>
 
-NyxR Companion is a Home Assistant add-on and integration. The add-on plays audio CDs from an optical drive, receives Bluetooth audio from phones and music players (A2DP), and is an AirPlay receiver for iPhones, iPads and Macs; it streams any one of them to an AirPlay 2 speaker such as a HomePod through [nyxr](https://github.com/pStrikeZ/Nyx-Refrain), the command-line sender of Nyx Refrain. The integration controls it all from Home Assistant, like a headless CD player and Bluetooth speaker.
+NyxR Companion is a Home Assistant add-on and integration. The add-on plays audio CDs, and discs of music files, from an optical drive, receives Bluetooth audio from phones and music players (A2DP), and is an AirPlay receiver for iPhones, iPads and Macs; it streams any one of them to an AirPlay 2 speaker such as a HomePod through [nyxr](https://github.com/pStrikeZ/Nyx-Refrain), the command-line sender of Nyx Refrain. The integration controls it all from Home Assistant, like a headless CD player and Bluetooth speaker.
 
 > Current version: 0.2.0, with nyxr from Nyx Refrain 0.9.5. Tested mainly with a HomePod mini on Home Assistant OS (amd64, in a Proxmox VM); reports from other setups are welcome.
 
@@ -21,6 +21,7 @@ NyxR Companion is a Home Assistant add-on and integration. The add-on plays audi
 ## Features
 
 - **CD player**: reads the disc directly, like a CD player does, and starts a track in about half a second. 16-bit 44.1 kHz audio reaches the speaker bit for bit. Track names and covers come from MusicBrainz, then CD-Text. Repeat all, repeat one and shuffle. Putting a disc in plays it, as on a CD player, even over Bluetooth or AirPlay (can be turned off).
+- **Data discs**: a CD, DVD or Blu-ray of music files (MP3, FLAC, AAC / M4A, Ogg, Opus, WAV, WMA and more) plays like an audio CD, folder by folder, with titles and covers from the files' tags. A **Folder** selector jumps to any folder on the disc.
 - **Bluetooth receiver**: phones and music players pair with it like with a speaker (no PIN), and it switches to Bluetooth by itself when one starts playing. Track info and play / pause / next / previous go over AVRCP.
 - **Pairing from the receiver's side**: for devices whose own pairing request does not get through (old iPods with a weak radio), pick them from a list of nearby devices.
 - **AirPlay relay**: shows up in the AirPlay list of iPhones, iPads and Macs, and passes what they play on to the speaker, with track info and cover. It switches to AirPlay by itself when a sender starts playing. On a HomePod this also keeps you clear of a tvOS 27 bug that stops its own Apple Music playback now and then (see [AirPlay](#airplay)).
@@ -52,6 +53,7 @@ Put a CD in and turn on **Stream**; turn on **Bluetooth pairing** and pair your 
 | Stream (switch) | Connects to the speaker and plays the selected source; off stops and remembers the CD position |
 | Source (select) | `cd`, `bluetooth` or `airplay`; only one streams at a time |
 | Play mode (select) | Repeat all, repeat one, shuffle (CD) |
+| Folder (select) | Data discs: the folder being played; picking one plays it from its first file |
 | Eject (button) | Stops and ejects the disc |
 | Status (sensor) | Drive and playback state; attributes carry the disc, track and errors |
 | Bluetooth pairing (switch) | Opens pairing for 3 minutes: phones can pair, and nearby devices are listed. Closes when something pairs |
@@ -85,7 +87,16 @@ Play, pause and track changes have no entities of their own: use the speaker's m
 
 - Read modes: **Raw** (default) reads sectors directly; **Raw + alignment** lines up each block on the previous one for drives whose reads are not sample-accurate; **cd-paranoia (overlap / full)** verifies every read for scratched discs, but takes 3–7 s to start after every jump.
 - The drive is capped at 4x by default (**Read speed**): quieter, and some slim drives drop off the SATA link when they spin up to full speed.
-- Mixed-mode and CD-Extra discs play their audio tracks; data discs and DVDs are refused.
+- Mixed-mode and CD-Extra discs play their audio tracks.
+
+## Data discs
+
+- A disc without audio tracks is searched for music files: CD, DVD and Blu-ray media, ISO 9660 (with Joliet or Rock Ridge names) and UDF up to 2.60, including discs written in packets (what Windows calls "like a USB flash drive"). The disc is read directly, without mounting it.
+- Files play in order: those in the top folder first, then folder by folder, sorted by name with numbers in their natural order ("2" before "10"). Play modes work as on a CD, over the whole disc; **Folder** jumps to a folder.
+- Anything [FFmpeg](https://ffmpeg.org) decodes plays: MP3, AAC / M4A, FLAC, ALAC, Ogg Vorbis, Opus, WAV, AIFF, WMA, APE, WavPack and others. Everything is converted to 16-bit 44.1 kHz stereo for the speaker.
+- Titles, artists and albums come from the files' tags, read as each file comes up (so a full disc is ready at once); until then the file name is shown. The cover is the picture in the file, else a `cover` / `folder` / `front` image in its folder.
+- A file that cannot be decoded is skipped. Video discs (DVD-Video, Blu-ray movies), DVD-Audio and SACD are not data discs and do not play.
+- In a virtual machine, a data disc also works in an emulated CD-ROM drive (an ISO image attached to the VM); audio CDs need the pass-through described below.
 
 ## Running Home Assistant OS in a virtual machine
 

@@ -85,6 +85,9 @@
       },
       "bluetooth_forget": {
         "name": "删除已配对的设备"
+      },
+      "folder": {
+        "name": "文件夹"
       }
     },
     "number": {
@@ -124,7 +127,7 @@
           "missing": "光驱未连接",
           "tray_open": "托盘已打开",
           "no_disc": "无光盘",
-          "not_audio": "不是音乐 CD",
+          "not_audio": "光盘上没有音乐",
           "not_ready": "读取中",
           "stopped": "已停止",
           "playing": "播放中",

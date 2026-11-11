@@ -1,6 +1,6 @@
 # NyxR Companion
 
-The add-on plays audio CDs, receives Bluetooth audio (A2DP) and is an AirPlay receiver for iPhones, iPads and Macs, and streams them to an AirPlay 2 speaker through nyxr. You control it with the **NyxR Companion integration** (install it with HACS from the [project page](https://github.com/pStrikeZ/Nyx-Refrain-Companion)).
+The add-on plays audio CDs and discs of music files, receives Bluetooth audio (A2DP) and is an AirPlay receiver for iPhones, iPads and Macs, and streams them to an AirPlay 2 speaker through nyxr. You control it with the **NyxR Companion integration** (install it with HACS from the [project page](https://github.com/pStrikeZ/Nyx-Refrain-Companion)).
 
 ## Getting started
 
@@ -21,6 +21,12 @@ Then put a CD in and turn on **Stream**, turn on **Bluetooth pairing** and pair 
 | `log_level` | `info` | `debug`, `info`, `warning` or `error`. |
 
 Everything else (receiver, read speed, latency profile, Bluetooth and AirPlay names...) is set from the integration's entities and kept by the add-on.
+
+## Data discs
+
+- A CD, DVD or Blu-ray of music files plays like an audio CD: the top folder's files first, then folder by folder. **Folder** jumps to a folder.
+- Titles and covers come from the files' tags as each file comes up; until then the file name is shown.
+- A file that cannot be decoded is skipped. Video discs do not play.
 
 ## Bluetooth
 

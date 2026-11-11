@@ -396,7 +396,7 @@ sys.path.insert(
 )
 
 # Import components under test
-from fake_server import FAKE_TOKEN, create_app
+from fake_server import FAKE_SERVER_KEY, FAKE_TOKEN, create_app
 from nyxr_companion import async_setup_entry, async_unload_entry
 from nyxr_companion.button import NyxrCompanionBluetoothButton, NyxrCompanionEjectButton
 from nyxr_companion.config_flow import NyxrCompanionConfigFlow
@@ -409,6 +409,7 @@ from nyxr_companion.number import (
 )
 from nyxr_companion.select import (
     NyxrCompanionLatencyProfileSelect,
+    NyxrCompanionFolderSelect,
     NyxrCompanionPlayModeSelect,
     NyxrCompanionReadModeSelect,
     NyxrCompanionBluetoothForgetSelect,
@@ -664,7 +665,7 @@ class IntegrationTestCase(AioHTTPTestCase):
         # 1. Test platform async_setup_entry
         select_entities: list[Any] = []
         await async_setup_select_entry(self.hass, self.entry, select_entities.extend)
-        self.assertEqual(len(select_entities), 7)
+        self.assertEqual(len(select_entities), 8)
 
         number_entities: list[Any] = []
         await async_setup_number_entry(self.hass, self.entry, number_entities.extend)
@@ -895,6 +896,62 @@ class IntegrationTestCase(AioHTTPTestCase):
         for entity in (pairing, device, disconnect, forget):
             self.assertFalse(entity.available)
         self.assertTrue(source.available)
+
+        await self.coordinator.async_close()
+        try:
+            await asyncio.wait_for(ws_task, timeout=1.0)
+        except (asyncio.TimeoutError, asyncio.CancelledError):
+            ws_task.cancel()
+
+    async def test_data_disc_folder(self) -> None:
+        self.entry.runtime_data = self.coordinator
+        await self.coordinator.async_setup()
+        ws_task = asyncio.create_task(self.coordinator.async_run_ws())
+        for _ in range(20):
+            if self.coordinator.connected:
+                break
+            await asyncio.sleep(0.05)
+        self.assertTrue(self.coordinator.connected)
+
+        folder = NyxrCompanionFolderSelect(self.coordinator)
+        status = NyxrCompanionStatusSensor(self.coordinator)
+        self.assertEqual(folder.unique_id, f"{self.entry.unique_id}_folder")
+        # An audio CD has no folders.
+        self.assertFalse(folder.available)
+        self.assertEqual(status.extra_state_attributes["disc_kind"], None)
+
+        server = self.app[FAKE_SERVER_KEY]
+        server.state["disc"] = {
+            "id": "data-0123456789abcdef0123",
+            "kind": "data",
+            "label": "MP3 DISC",
+            "album": "MP3 DISC",
+            "artist": None,
+            "cover_url": None,
+            "track_count": 40,
+            "folder": "",
+            "folders": [
+                {"name": "", "first": 1, "tracks": 1},
+                {"name": "Album A", "first": 2, "tracks": 20},
+                {"name": "Album A/Disc 2", "first": 22, "tracks": 19},
+            ],
+            "tracks": [{"number": 1, "title": "intro", "artist": None, "album": "MP3 DISC",
+                        "length": None, "cover_url": None}],
+        }
+        server.state["track"] = None
+        await server.broadcast()
+        for _ in range(20):
+            if folder.available:
+                break
+            await asyncio.sleep(0.05)
+        self.assertEqual(folder.options, ["/", "Album A", "Album A/Disc 2"])
+        self.assertEqual(folder.current_option, "/")
+        attrs = status.extra_state_attributes
+        self.assertEqual((attrs["disc_kind"], attrs["track_count"], attrs["folder"]), ("data", 40, ""))
+
+        await folder.async_select_option("Album A/Disc 2")
+        self.assertEqual(folder.current_option, "Album A/Disc 2")
+        self.assertEqual(self.coordinator.data["track"], 22)
 
         await self.coordinator.async_close()
         try:
