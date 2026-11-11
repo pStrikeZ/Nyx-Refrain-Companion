@@ -1066,9 +1066,21 @@ def _feed(disc, f, proc):
     threading.Thread(target=run, daemon=True).start()
 
 
+def _drive_counters():
+    """(reads completed, sectors read) the kernel counts for the drive, to tell a slow
+    probe that read a lot from one that seeked back and forth."""
+    try:
+        with open(f"/sys/block/{os.path.basename(os.path.realpath(DEVICE))}/stat") as stat:
+            fields = stat.read().split()
+        return int(fields[0]), int(fields[2])
+    except (OSError, ValueError, IndexError):
+        return 0, 0
+
+
 def _run_ffmpeg(disc, f, tool, before, after, limit):
     """Runs ffprobe / ffmpeg on a file; returns its stdout (up to `limit` bytes) or None."""
     began = time.monotonic()
+    reads_before = _drive_counters()
     if disc.device is not None:
         disc.device.spin_up()
     source, piped, temp = _ffmpeg_input(disc, f)
@@ -1095,7 +1107,10 @@ def _run_ffmpeg(disc, f, tool, before, after, limit):
         timer.cancel()
         if temp:
             os.unlink(temp)
-    log.info("%s %s took %.1f s", tool, f.name, time.monotonic() - began)
+    reads_after = _drive_counters()
+    log.info("%s %s took %.1f s (%d reads, %.1f MB from the drive)", tool, f.name,
+             time.monotonic() - began, reads_after[0] - reads_before[0],
+             (reads_after[1] - reads_before[1]) * 512 / 1e6)
     return out if proc.returncode == 0 and len(out) <= limit else None
 
 
