@@ -141,12 +141,14 @@ class DataDiscTest(unittest.TestCase):
     def test_folder_and_pictures(self):
         self.player.play_folder("Album B")
         self.assertTrue(wait_for(lambda: self.player.track == 4 and self.player.lengths[3]))
+        self.assertTrue(wait_for(lambda: self.player.track_info()["cover_url"]))  # follows the sound
         first = self.player.track_info()
         self.assertEqual((first["title"], first["album"]), ("1 first", "Album B"))
         with open(first["cover_url"][len("file://"):], "rb") as f:
             self.assertEqual(f.read(3), b"\xff\xd8\xff")  # the folder's cover.jpg
         self.player.next()
         self.assertTrue(wait_for(lambda: self.player.track == 5 and self.titles()[4] == "Second"))
+        self.assertTrue(wait_for(lambda: self.player.track_info()["cover_url"]))
         second = self.player.track_info()
         self.assertEqual((second["artist"], second["album"]), ("Someone", "The Album"))
         with open(second["cover_url"][len("file://"):], "rb") as f:

@@ -1683,14 +1683,6 @@ class Player:
                 return
         f = data.tracks[track - 1]
         info = probe_file(data, f)
-        cover = None
-        try:
-            if info["picture"]:
-                cover = save_cover(embedded_picture(data, f))
-            if cover is None and _split(f.path)[0] in data.covers:
-                cover = save_cover(data.read(data.covers[_split(f.path)[0]][1]))
-        except OSError as e:
-            log.warning("cover of %s: %s", f.path, e)
         with self.lock:
             if self.data is not data or self.disc_epoch != epoch:
                 return
@@ -1699,9 +1691,28 @@ class Player:
             for key in ("title", "artist", "album", "length"):
                 if info[key]:
                     t[key] = info[key]
-            t["cover_url"] = cover
             if info["length"]:
                 self.lengths[track - 1] = int(info["length"] * SECTORS_PER_SECOND)
+        self.changed()
+        # The picture can take seconds to come off the disc: it follows the sound.
+        threading.Thread(target=self._cover, args=(data, track, epoch, f, info),
+                         daemon=True).start()
+
+    def _cover(self, data, track, epoch, f, info):
+        cover = None
+        try:
+            if info["picture"]:
+                cover = save_cover(embedded_picture(data, f))
+            if cover is None and _split(f.path)[0] in data.covers:
+                cover = save_cover(data.read(data.covers[_split(f.path)[0]][1]))
+        except OSError as e:
+            log.warning("cover of %s: %s", f.path, e)
+        if cover is None:
+            return
+        with self.lock:
+            if self.data is not data or self.disc_epoch != epoch:
+                return
+            self.disc["tracks"][track - 1]["cover_url"] = cover
         self.changed()
 
     # -- nyxr ---------------------------------------------------------------------------
