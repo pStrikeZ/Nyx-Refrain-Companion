@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- Data discs: a folder that holds music only in the folders under it (the disc's top folder, say) is in the *Folder* list too; picking a folder plays it and everything under it.
+
 ## 0.3.0
 
 - Data discs: a CD, DVD or Blu-ray of music files (ISO 9660 with Joliet or Rock Ridge, UDF up to 2.60; multisession discs too) plays like an audio CD, with titles and covers from the files' tags. FLAC, MP3, AAC / M4A, Ogg, Opus, WAV, WMA and the rest ffmpeg decodes. Nothing is mounted.
