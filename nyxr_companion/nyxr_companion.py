@@ -973,7 +973,7 @@ def scan_data_disc():
         last = struct.unpack("l", arg)[0]
         if last > 0:
             device.extend(last)  # the drive may report less than the disc holds
-            if device.blocks > device.kernel_blocks:
+            if device.blocks > device.kernel_blocks + 1:  # LAST_WRITTEN may be a block high
                 log.warning("the kernel sees %d blocks of the disc, the drive says %d: stale "
                             "size, reading the rest by hand", device.kernel_blocks, device.blocks)
             last_block = last
