@@ -21,7 +21,7 @@ NyxR Companion is a Home Assistant add-on and integration. The add-on plays audi
 ## Features
 
 - **CD player**: reads the disc directly, like a CD player does, and starts a track in about half a second. 16-bit 44.1 kHz audio reaches the speaker bit for bit. Track names and covers come from MusicBrainz, then CD-Text. Repeat all, repeat one and shuffle. Putting a disc in plays it, as on a CD player, even over Bluetooth or AirPlay (can be turned off).
-- **Data discs**: a CD, DVD or Blu-ray of music files (MP3, FLAC, AAC / M4A, Ogg, Opus, WAV, WMA and more) plays like an audio CD, folder by folder, with titles and covers from the files' tags. A **Folder** selector keeps playing to one folder of the disc.
+- **Data discs**: a CD, DVD or Blu-ray of music files (MP3, FLAC, AAC / M4A, Ogg, Opus, WAV, WMA and more) plays like an audio CD, folder by folder, with titles and covers from the files' tags. A **Folder** selector keeps playing to one folder of the disc (and the folders under it).
 - **Bluetooth receiver**: phones and music players pair with it like with a speaker (no PIN), and it switches to Bluetooth by itself when one starts playing. Track info and play / pause / next / previous go over AVRCP.
 - **Pairing from the receiver's side**: for devices whose own pairing request does not get through (old iPods with a weak radio), pick them from a list of nearby devices.
 - **AirPlay relay**: shows up in the AirPlay list of iPhones, iPads and Macs, and passes what they play on to the speaker, with track info and cover. It switches to AirPlay by itself when a sender starts playing. On a HomePod this also keeps you clear of a tvOS 27 bug that stops its own Apple Music playback now and then (see [AirPlay](#airplay)).

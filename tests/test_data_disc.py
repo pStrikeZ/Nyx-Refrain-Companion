@@ -51,6 +51,9 @@ def make_disc():
     tone(f"{DISC}/Album B/1 first.wav")
     tone(f"{DISC}/Album A/song.ogg", title="Ogg Song")
     tone(f"{DISC}/root.flac", 2.0, title="Root Song")
+    # A folder with music only in the folders under it.
+    tone(f"{DISC}/Parent/Child 1/deep.wav")
+    tone(f"{DISC}/Parent/Child 2/other.wav")
     ffmpeg("-f", "lavfi", "-i", "color=red:s=32x32", "-frames:v", "1", f"{DISC}/Album B/cover.jpg")
     # A picture inside the file wins over the folder's.
     ffmpeg("-f", "lavfi", "-i", "color=blue:s=32x32", "-frames:v", "1", f"{STATE}/picture.png")
@@ -127,15 +130,19 @@ class DataDiscTest(unittest.TestCase):
         self.assertEqual(
             [f.path for f in self.disc.tracks],
             ["root.flac", "Album A/broken.mp3", "Album A/song.ogg",
-             "Album B/1 first.wav", "Album B/2 second.flac", "Album B/10 tenth.flac"],
+             "Album B/1 first.wav", "Album B/2 second.flac", "Album B/10 tenth.flac",
+             "Parent/Child 1/deep.wav", "Parent/Child 2/other.wav"],
         )
         disc = self.player.snapshot()["disc"]
-        self.assertEqual((disc["kind"], disc["label"], disc["track_count"]), ("data", "MY DISC", 6))
+        self.assertEqual((disc["kind"], disc["label"], disc["track_count"]), ("data", "MY DISC", 8))
         self.assertEqual(disc["folder"], "")
         self.assertEqual(
             disc["folders"],
             [{"name": "", "first": 1, "tracks": 1}, {"name": "Album A", "first": 2, "tracks": 2},
-             {"name": "Album B", "first": 4, "tracks": 3}],
+             {"name": "Album B", "first": 4, "tracks": 3},
+             {"name": "Parent", "first": 7, "tracks": 2},
+             {"name": "Parent/Child 1", "first": 7, "tracks": 1},
+             {"name": "Parent/Child 2", "first": 8, "tracks": 1}],
         )
         # Only the folder being played is listed; names stand in for titles until played.
         self.assertEqual(disc["tracks"], [{"number": 1, "title": "root", "artist": None,
@@ -178,6 +185,29 @@ class DataDiscTest(unittest.TestCase):
         self.assertEqual([t["number"] for t in tracks], [4, 5, 6])
         with self.assertRaises(daemon.BadRequest):
             self.player.play_folder("No Such Folder")
+
+    def test_playing_kept_to_a_folder_and_what_is_under_it(self):
+        p = self.player
+        p.play_folder("Parent")  # holds no music itself, only in the folders under it
+        self.assertEqual((p.track, p.snapshot()["disc"]["scope"]), (7, "Parent"))
+        seen = []
+        for _ in range(5):
+            seen.append(p.track)
+            p.next()
+        self.assertEqual(seen, [7, 8, 7, 8, 7])
+        p.set_mode("shuffle")
+        p.play_folder("Parent/Child 2")
+        for _ in range(6):
+            self.assertEqual(p.track, 8)
+            p.next()
+        p.set_mode("repeat_all")
+        p.play_folder("")  # the top of the disc is only its own files
+        self.assertEqual(p.track, 1)
+        p.next()
+        self.assertEqual(p.track, 1)
+        with self.assertRaises(daemon.BadRequest):
+            p.play_folder("Parent/Chil")  # not a folder, only the start of a name
+        p.play_folder(None)
 
     def test_playing_kept_to_a_folder(self):
         p = self.player

@@ -878,6 +878,29 @@ def _split(path):
     return folder, name
 
 
+def in_folder(track_folder, folder):
+    """Whether a track in `track_folder` is played when playing is kept to `folder`: the
+    folder itself and everything under it. The top of the disc ("") is only its own files
+    (the whole disc is no folder at all)."""
+    if folder == "":
+        return track_folder == ""
+    return track_folder == folder or track_folder.startswith(folder + "/")
+
+
+def folder_list(tracks):
+    """The folders to pick from, parents before their children: every folder that holds
+    music, itself or in a folder under it. `first` and `tracks` count what is under it."""
+    folders = {}
+    for t in tracks:
+        parts = t["folder"].split("/") if t["folder"] else []
+        for depth in range(1 if parts else 0, len(parts) + 1):
+            name = "/".join(parts[:depth])
+            if name not in folders:
+                folders[name] = {"name": name, "first": t["number"], "tracks": 0}
+            folders[name]["tracks"] += 1
+    return list(folders.values())
+
+
 class DataDisc:
     """The music files of a data disc, in playing order: folder by folder, by name."""
 
@@ -1437,11 +1460,7 @@ class Player:
         if self.data is None:
             return dict(disc, track_count=len(disc["tracks"]))
         folder = self._folder()
-        folders = []
-        for t in disc["tracks"]:
-            if not folders or folders[-1]["name"] != t["folder"]:
-                folders.append({"name": t["folder"], "first": t["number"], "tracks": 0})
-            folders[-1]["tracks"] += 1
+        folders = folder_list(disc["tracks"])
         hidden = ("folder", "file", "probed")
         return dict(
             disc,
@@ -1466,7 +1485,7 @@ class Player:
         kept to."""
         if self.scope is None or self.disc is None:
             return list(range(1, self._count() + 1))
-        return [t["number"] for t in self.disc["tracks"] if t["folder"] == self.scope]
+        return [t["number"] for t in self.disc["tracks"] if in_folder(t["folder"], self.scope)]
 
     def _reshuffle(self, first=None):
         rest = [t for t in self._pool() if t != first]
@@ -1598,7 +1617,8 @@ class Player:
                 raise Conflict("no data disc")
             first = None
             if folder is not None:
-                first = next((t["number"] for t in self.disc["tracks"] if t["folder"] == folder), None)
+                first = next((t["number"] for t in self.disc["tracks"]
+                              if in_folder(t["folder"], folder)), None)
                 if first is None:
                     raise BadRequest(f"no folder {folder!r} with music on the disc")
             self.scope = folder

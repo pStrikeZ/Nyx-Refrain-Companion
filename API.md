@@ -121,7 +121,7 @@ A disc without audio tracks is searched for music files (CD, DVD or BD; ISO 9660
 |---|---|
 | `label` | The disc's volume label |
 | `track_count` | Music files on the disc. `track` and `/api/play` count over all of them |
-| `folders` | Folders that hold music, in playing order: `name` (path from the top of the disc, `""` for the top itself), `first` (number of its first track), `tracks` (how many) |
+| `folders` | Folders that hold music, in themselves or in a folder under them, parents before their children: `name` (path from the top of the disc, `""` for the top itself, listed only if it holds music directly), `first` (number of the first track in it or under it), `tracks` (how many, folders under it included) |
 | `folder` | The folder of the current track (the first folder before anything is played) |
 | `scope` | The folder that playing is kept to (see `/api/folder`), or `null` for the whole disc |
 | `tracks` | The tracks of `folder` only: a disc may hold thousands. `number` is the track's number on the disc |
@@ -183,7 +183,7 @@ An AirPlay 2 receiver (shairport-sync) that iPhones, iPads and Macs can play to;
 | POST | `/api/mode` | `{"mode": "shuffle"}` | Sets the play mode |
 | POST | `/api/eject` | `{}` | Stops the stream and ejects the disc |
 | POST | `/api/play` | `{"track": 3}` | Plays a track (turning the stream on); without `track`, resumes |
-| POST | `/api/folder` | `{"folder": "Album A"}` | Data discs: plays a folder from its first file (turning the stream on) and keeps playing to it: next, previous, the end of a track and shuffle stay inside the folder (the folder wraps around). `{"folder": null}` goes back to the whole disc and the track goes on; so does playing a track outside the folder, or a new disc. `400` for a folder not in `folders`, `409` without a data disc |
+| POST | `/api/folder` | `{"folder": "Album A"}` | Data discs: plays a folder from its first file (turning the stream on) and keeps playing to it and the folders under it: next, previous, the end of a track and shuffle stay inside (it wraps around). `""` is only the files at the top of the disc. `{"folder": null}` goes back to the whole disc and the track goes on; so does playing a track outside the folder, or a new disc. `400` for a folder not in `folders`, `409` without a data disc |
 | POST | `/api/pause` | `{}` | Pauses (the stream stays connected) |
 | POST | `/api/next` | `{}` | Next track |
 | POST | `/api/previous` | `{}` | Previous track (back to the start of this one after 3 s) |
