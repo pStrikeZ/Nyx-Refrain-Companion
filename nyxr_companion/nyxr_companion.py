@@ -26,6 +26,7 @@ import asyncio
 import base64
 import collections
 import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -74,6 +75,7 @@ CDROM_DRIVE_STATUS = 0x5326
 CDROM_LOCKDOOR = 0x5329
 CDROMMULTISESSION = 0x5310
 CDROM_LAST_WRITTEN = 0x5395
+CDROM_MEDIA_CHANGED = 0x5325
 CDSL_CURRENT = 0x7FFFFFFF
 DRIVE_STATUS = {1: "no_disc", 2: "tray_open", 3: "not_ready", 4: "ok"}
 
@@ -324,19 +326,65 @@ def discover_receivers():
 # ---------------------------------------------------------------------------------------
 # Drive access
 
+# The status is polled on one descriptor kept open. Opening /dev/sr0 is what makes the
+# kernel look for a changed disc (sr_block_open), and when that happens while the drive is
+# still spinning up, its revalidation gives up at once and the event is spent: the block
+# device then keeps the previous disc's size and multisession offset until the VM is
+# restarted. (A reading of the kernel's source, not yet confirmed on a drive.)
+_held = None
+_held_lock = threading.Lock()
+
+
+def _drive_fd():
+    global _held
+    if _held is None:
+        _held = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
+    return _held
+
+
+def _drop_fd():
+    global _held
+    if _held is not None:
+        try:
+            os.close(_held)
+        except OSError:
+            pass
+        _held = None
+
+
 def drive_status():
     if FAKE_DISC or FAKE_DATA_DISC:
         return "ok"
+    with _held_lock:
+        try:
+            fd = _drive_fd()
+        except OSError:
+            return "missing"
+        try:
+            status = DRIVE_STATUS.get(fcntl.ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT), "not_ready")
+            if status in ("no_disc", "tray_open"):
+                # Lets the kernel note that the disc is gone, so that the next one is a change.
+                try:
+                    fcntl.ioctl(fd, CDROM_MEDIA_CHANGED, CDSL_CURRENT)
+                except OSError:
+                    pass
+            return status
+        except OSError as e:
+            if e.errno in (errno.ENODEV, errno.ENXIO, errno.EBADF, errno.EIO):
+                _drop_fd()  # the drive went away (hot plug): open it again next time
+                return "missing"
+            return "not_ready"
+
+
+def notice_new_disc():
+    """The drive is ready after a disc came in: opens the device afresh, once, so that the
+    kernel sees the change while it can still read the disc's size. Call before reading."""
+    if FAKE_DISC or FAKE_DATA_DISC:
+        return
     try:
-        fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
+        os.close(os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK))
     except OSError:
-        return "missing"
-    try:
-        return DRIVE_STATUS.get(fcntl.ioctl(fd, CDROM_DRIVE_STATUS, CDSL_CURRENT), "not_ready")
-    except OSError:
-        return "not_ready"
-    finally:
-        os.close(fd)
+        pass
 
 
 class SgIoHdr(ctypes.Structure):
@@ -387,24 +435,25 @@ def limit_speed():
     this is repeated before anything that may spin it up."""
     if FAKE_DISC or FAKE_DATA_DISC:
         return
-    try:
-        fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
-    except OSError:
-        return
-    try:
+    with _held_lock:
         try:
-            fcntl.ioctl(fd, CDROM_SELECT_SPEED, SETTINGS["read_speed"])
+            fd = _drive_fd()
         except OSError:
-            _set_cd_speed(fd, SETTINGS["read_speed"])
-    except OSError:
-        pass  # no disc, or not ready yet
-    finally:
-        os.close(fd)
+            return
+        try:
+            try:
+                fcntl.ioctl(fd, CDROM_SELECT_SPEED, SETTINGS["read_speed"])
+            except OSError:
+                _set_cd_speed(fd, SETTINGS["read_speed"])
+        except OSError:
+            pass  # no disc, or not ready yet
 
 
 def eject_disc():
     if FAKE_DISC or FAKE_DATA_DISC:
         return
+    with _held_lock:
+        _drop_fd()  # the kernel will not eject while a second descriptor is open
     fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
     try:
         fcntl.ioctl(fd, CDROM_LOCKDOOR, 0)
@@ -924,6 +973,9 @@ def scan_data_disc():
         last = struct.unpack("l", arg)[0]
         if last > 0:
             device.extend(last)  # the drive may report less than the disc holds
+            if device.blocks > device.kernel_blocks:
+                log.warning("the kernel sees %d blocks of the disc, the drive says %d: stale "
+                            "size, reading the rest by hand", device.kernel_blocks, device.blocks)
             last_block = last
     except OSError:
         pass
@@ -3629,6 +3681,7 @@ async def monitor_drive(player):
     # was already in when the daemon started), and plays like on a CD player.
     emptied = False
     while True:
+        last_status_before = last_status
         status = await loop.run_in_executor(None, drive_status)
         if status != "missing" and (status != last_status or time.monotonic() - last_limit > 30):
             await loop.run_in_executor(None, limit_speed)
@@ -3641,6 +3694,8 @@ async def monitor_drive(player):
             loaded, failures = None, 0
             emptied = emptied or status in ("no_disc", "tray_open")
         elif loaded is None:
+            if last_status_before != "ok":
+                await loop.run_in_executor(None, notice_new_disc)
             try:
                 disc_id, lengths, cd_tracks = await loop.run_in_executor(None, read_toc)
             except NotAudio:
