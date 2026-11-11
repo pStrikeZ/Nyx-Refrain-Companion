@@ -815,6 +815,7 @@ COVER_STEMS = ("cover", "folder", "front", "album", "albumart")
 COVER_EXTENSIONS = ("jpg", "jpeg", "png")
 MAX_COVER_BYTES = 16 << 20
 PROBE_TIMEOUT = 30
+SPOOL_LIMIT = 96 << 20  # files up to this size are copied off a disc before ffmpeg reads them
 
 
 def _natural(text):
@@ -873,7 +874,9 @@ class DataDisc:
         if self.volume is None:
             return os.path.join(FAKE_DATA_DISC, f.path), 0, f.size
         span = f.span()
-        return None if span is None else (DEVICE, span[0], span[1])
+        if span is None or self.device is None or span[0] + span[1] > self.device.kernel_blocks * 2048:
+            return None  # in pieces, or past what the block device lets through
+        return (DEVICE, span[0], span[1])
 
     def read(self, f, offset=0, size=None):
         if self.volume is None:
@@ -913,7 +916,8 @@ def scan_data_disc():
         arg = bytearray(struct.pack("l", 0))
         fcntl.ioctl(device.fd, CDROM_LAST_WRITTEN, arg)
         last = struct.unpack("l", arg)[0]
-        if 0 < last < device.blocks:
+        if last > 0:
+            device.extend(last)  # the drive may report less than the disc holds
             last_block = last
     except OSError:
         pass
@@ -936,12 +940,47 @@ def _ffmpeg_input(disc, f):
     """ffmpeg's input arguments for a file, and whether it reads the file from stdin."""
     where = disc.where(f)
     if where is None:
-        return ["-i", "pipe:0"], True
+        if f.size <= SPOOL_LIMIT:
+            # A pipe cannot be sought in, and an M4A with its index at the end needs that:
+            # copy the file out of the drive first (a few seconds at the drive's speed).
+            path = spool(disc, f)
+            if path:
+                return ["-i", "file:" + path], False, path
+        return ["-i", "pipe:0"], True, None
     path, offset, size = where
     if offset == 0 and disc.volume is None:
-        return ["-i", "file:" + path], False
+        return ["-i", "file:" + path], False, None
     # ffmpeg reads the file's bytes off the drive itself, and can seek in them.
-    return ["-i", f"subfile,,start,{offset},end,{offset + size},,:{path}"], False
+    return ["-i", f"subfile,,start,{offset},end,{offset + size},,:{path}"], False, None
+
+
+def spool(disc, f):
+    """Copies a file off the disc into a temporary file; its path, or None if it could not
+    be read whole."""
+    try:
+        os.makedirs(RUN_DIR, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="spool-", dir=RUN_DIR)
+    except OSError as e:
+        log.warning("cannot spool %s: %s", f.path, e)
+        return None
+    try:
+        with os.fdopen(fd, "wb") as out:
+            offset = 0
+            while offset < f.size:
+                data = disc.read(f, offset, 256 << 10)
+                if not data:
+                    device = disc.device
+                    log.warning("read of %s ended at %d of %d bytes%s", f.path, offset, f.size,
+                                f" ({device.last_error})" if device and device.last_error else "")
+                    break
+                out.write(data)
+                offset += len(data)
+        if offset > 0:
+            return path
+    except OSError as e:
+        log.warning("cannot spool %s: %s", f.path, e)
+    os.unlink(path)
+    return None
 
 
 def _feed(disc, f, proc):
@@ -952,6 +991,9 @@ def _feed(disc, f, proc):
             while offset < f.size:
                 data = disc.read(f, offset, 256 << 10)
                 if not data:
+                    device = disc.device
+                    log.warning("read of %s ended at %d of %d bytes%s", f.path, offset, f.size,
+                                f" ({device.last_error})" if device and device.last_error else "")
                     break
                 proc.stdin.write(data)
                 offset += len(data)
@@ -968,13 +1010,15 @@ def _feed(disc, f, proc):
 
 def _run_ffmpeg(disc, f, tool, before, after, limit):
     """Runs ffprobe / ffmpeg on a file; returns its stdout (up to `limit` bytes) or None."""
-    source, piped = _ffmpeg_input(disc, f)
+    source, piped, temp = _ffmpeg_input(disc, f)
     cmd = [tool, "-v", "error", *before, *source, *after]
     try:
         proc = subprocess.Popen(cmd, stdin=subprocess.PIPE if piped else subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     except OSError as e:
         log.warning("%s: %s", tool, e)
+        if temp:
+            os.unlink(temp)
         return None
     if piped:
         _feed(disc, f, proc)
@@ -988,6 +1032,8 @@ def _run_ffmpeg(disc, f, tool, before, after, limit):
         proc.wait()
     finally:
         timer.cancel()
+        if temp:
+            os.unlink(temp)
     return out if proc.returncode == 0 and len(out) <= limit else None
 
 
@@ -1080,7 +1126,7 @@ class FileReader:
         self.proc = None
         self.error = None
         self.log = tempfile.TemporaryFile()
-        source, piped = _ffmpeg_input(disc, f)
+        source, piped, self.temp = _ffmpeg_input(disc, f)
         seek = ["-ss", f"{offset / SECTORS_PER_SECOND:.3f}"] if offset else []
         cmd = ["ffmpeg", "-nostdin", "-v", "error", *seek, *source,
                "-vn", "-sn", "-dn", "-map", "0:a:0",
@@ -1092,6 +1138,7 @@ class FileReader:
             )
         except OSError as e:
             self.error = f"ffmpeg: {e}"
+            self._drop_temp()
             return
         if piped:
             _feed(disc, f, self.proc)
@@ -1103,11 +1150,20 @@ class FileReader:
         self.produced += len(data)
         return data
 
+    def _drop_temp(self):
+        if self.temp:
+            try:
+                os.unlink(self.temp)
+            except OSError:
+                pass
+            self.temp = None
+
     def finish(self):
         """Returns an error string if the file could not be played, else None."""
         if self.proc is None:
             return self.error
         code = self.proc.wait()
+        self._drop_temp()
         self.proc.stdout.close()
         self.log.seek(0)
         err = self.log.read().decode(errors="replace").strip()
@@ -1126,6 +1182,7 @@ class FileReader:
                 self.proc.kill()
                 self.proc.wait()
             self.proc.stdout.close()
+        self._drop_temp()
         self.log.close()
 
 

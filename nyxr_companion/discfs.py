@@ -13,8 +13,11 @@ Every file comes with where its data lies on the disc (`extents`), so a decoder 
 pointed at the drive itself.
 """
 
+import ctypes
+import fcntl
 import os
 import struct
+import time
 
 BLOCK = 2048  # every optical format uses 2048-byte sectors
 MAX_DIR_BYTES = 32 << 20  # a directory larger than this is taken for damage
@@ -26,6 +29,20 @@ class NotRecognized(Exception):
     """No file system this module reads."""
 
 
+class _SgHeader(ctypes.Structure):  # struct sg_io_hdr
+    _fields_ = [("interface_id", ctypes.c_int), ("dxfer_direction", ctypes.c_int),
+                ("cmd_len", ctypes.c_ubyte), ("mx_sb_len", ctypes.c_ubyte),
+                ("iovec_count", ctypes.c_ushort), ("dxfer_len", ctypes.c_uint),
+                ("dxferp", ctypes.c_void_p), ("cmdp", ctypes.c_void_p),
+                ("sbp", ctypes.c_void_p), ("timeout", ctypes.c_uint),
+                ("flags", ctypes.c_uint), ("pack_id", ctypes.c_int),
+                ("usr_ptr", ctypes.c_void_p), ("status", ctypes.c_ubyte),
+                ("masked_status", ctypes.c_ubyte), ("msg_status", ctypes.c_ubyte),
+                ("sb_len_wr", ctypes.c_ubyte), ("host_status", ctypes.c_ushort),
+                ("driver_status", ctypes.c_ushort), ("resid", ctypes.c_int),
+                ("duration", ctypes.c_uint), ("info", ctypes.c_uint)]
+
+
 class Device:
     """A drive or an image file, read in 2048-byte blocks."""
 
@@ -35,6 +52,16 @@ class Device:
             self.blocks = os.lseek(self.fd, 0, os.SEEK_END) // BLOCK
         except OSError:
             self.blocks = 0
+        # What the kernel lets through the block device. A drive may report less than the
+        # disc holds (a DVD-R seen to report 371 MB of 4.3 GB), and what lies beyond is read
+        # with READ (12) by hand once `extend` is told where the disc really ends.
+        self.kernel_blocks = self.blocks
+        self.last_error = None
+
+    def extend(self, last_block):
+        """The disc holds blocks up to `last_block`, whatever the block device reports."""
+        if last_block + 1 > self.blocks:
+            self.blocks = last_block + 1
 
     def read(self, block, count=1):
         """`count` blocks from `block`; short (or empty) past the end or on a read error."""
@@ -44,13 +71,49 @@ class Device:
         out = bytearray()
         try:
             while len(out) < size:
-                data = os.pread(self.fd, size - len(out), offset + len(out))
+                pos = offset + len(out)
+                if self.blocks > self.kernel_blocks and pos // BLOCK >= self.kernel_blocks:
+                    data = self._sg_read(pos, size - len(out))
+                else:
+                    want = size - len(out)
+                    if self.blocks > self.kernel_blocks:  # do not run over the kernel's end
+                        want = min(want, self.kernel_blocks * BLOCK - pos)
+                    data = os.pread(self.fd, want, pos)
                 if not data:
                     break
                 out += data
         except OSError:
             pass
         return bytes(out)
+
+    def _sg_read(self, offset, size):
+        """READ (12) through SG_IO: up to 64 blocks from the one holding `offset`."""
+        block, skip = divmod(offset, BLOCK)
+        count = min(64, -(-(skip + size) // BLOCK), self.blocks - block)
+        if count <= 0:
+            return b""
+        buf = ctypes.create_string_buffer(count * BLOCK)
+        cdb = ctypes.create_string_buffer(struct.pack(">BBIIBB", 0xA8, 0, block, count, 0, 0), 12)
+        sense = ctypes.create_string_buffer(32)
+        for attempt in range(20):
+            hdr = _SgHeader(ord("S"), -3, 12, 32, 0, count * BLOCK, ctypes.addressof(buf),
+                            ctypes.addressof(cdb), ctypes.addressof(sense), 30000)
+            fcntl.ioctl(self.fd, 0x2285, hdr)  # SG_IO
+            if not (hdr.status or hdr.host_status or hdr.driver_status & 0xF):
+                break
+            # A drive that has spun down answers NOT READY / UNIT ATTENTION while it comes
+            # back (the block device waits for it, SG_IO does not); a bad sector does not
+            # get better, so only a retry or two.
+            key = sense.raw[2] & 0xF if hdr.sb_len_wr > 2 else 0
+            asc = sense.raw[12:14].hex() if hdr.sb_len_wr > 13 else ""
+            self.last_error = (f"block {block}: SCSI status {hdr.status:#x}, host {hdr.host_status}, "
+                               f"driver {hdr.driver_status:#x}, sense key {key} {asc}")
+            if key not in (2, 6) and attempt >= 2:
+                return b""
+            time.sleep(0.5)
+        else:
+            return b""
+        return buf.raw[skip : skip + size]
 
     def close(self):
         if self.fd is not None:
