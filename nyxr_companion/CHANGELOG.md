@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Data discs: a CD, DVD or Blu-ray of music files (ISO 9660 with Joliet or Rock Ridge, UDF up to 2.60; multisession discs too) plays like an audio CD, with titles and covers from the files' tags. FLAC, MP3, AAC / M4A, Ogg, Opus, WAV, WMA and the rest ffmpeg decodes. Nothing is mounted.
+- New *Folder* selector: picking a folder plays it from its first file and keeps next, previous and shuffle inside it; *All folders* goes back to the whole disc. Play modes otherwise work over the whole disc.
+- A disc put in plays by itself (setting *Play inserted discs automatically*), data discs too.
+- Reading a new disc waits until the system's own probing of it is over, so the drive's head does not swing between the two.
+
 ## 0.2.1
 
 - CD: putting a disc in plays it from the first track, like a CD player, switching from Bluetooth or AirPlay if they are playing. A disc already in the drive when the add-on starts is not played. New setting *Play inserted discs automatically* (on by default).

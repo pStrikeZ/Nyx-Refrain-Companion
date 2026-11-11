@@ -108,6 +108,12 @@ args: -device virtio-scsi-pci,id=cdscsi -blockdev driver=host_device,filename=/d
 
 网页界面不显示 `args`。要把虚拟机完全关机再启动才会生效。
 
+增删设备后 `sg` 的编号会变。可以在宿主机上用 udev 规则给光驱一个固定的名字（写在 `/etc/udev/rules.d/99-optical-drive.rules`，然后 `udevadm control --reload && udevadm trigger`），上面的 `filename` 就写 `/dev/optical-drive-sg`；有多个光驱时再加一条 `ATTRS{model}=="..."` 之类的匹配：
+
+```
+SUBSYSTEM=="scsi_generic", SUBSYSTEMS=="scsi", ATTRS{type}=="5", SYMLINK+="optical-drive-sg"
+```
+
 ## 已知限制
 
 - 每次推流只连一个 AirPlay 接收端，不支持多房间。

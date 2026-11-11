@@ -108,6 +108,12 @@ args: -device virtio-scsi-pci,id=cdscsi -blockdev driver=host_device,filename=/d
 
 The web interface does not show `args`. The VM needs a full stop and start for it to apply.
 
+The `sg` number changes when drives are added or removed. A udev rule on the host gives the drive a name that stays (`/etc/udev/rules.d/99-optical-drive.rules`, then `udevadm control --reload && udevadm trigger`), to use as `filename=/dev/optical-drive-sg` above; with several optical drives, add a match such as `ATTRS{model}=="..."`:
+
+```
+SUBSYSTEM=="scsi_generic", SUBSYSTEMS=="scsi", ATTRS{type}=="5", SYMLINK+="optical-drive-sg"
+```
+
 ## Known limitations
 
 - One AirPlay receiver per stream; no multi-room.
