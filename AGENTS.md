@@ -24,6 +24,10 @@ Notes for coding agents (and people) working in this repository. `CLAUDE.md` is 
 - HAOS's BlueZ cannot be configured (`JustWorksRepairing` is `never`): a device that removed its pairing is turned down silently; the daemon notices it connecting and dropping without services and forgets the old pairing.
 - In a VM, an optical drive passed through as a raw SCSI device refuses `CDROM_SELECT_SPEED`; the daemon falls back to SET CD SPEED over SG_IO (`SYS_RAWIO`).
 
+## CD-Text
+
+- libcdio finds none on some drives, though the disc has it: READ TOC format 5 answers with the 4-byte header, then **28 bytes the drive never wrote** (whatever its buffer held, e.g. the last audio sector read, or an INQUIRY answer), then the packs. The length it declares leaves those 28 bytes out, so the last 1-2 packs never arrive (the size-info packs, 0x8F, not the text). The same bytes come back over SG_IO on the host and in the VM, with any allocation length, MSF bit or session number. `cdtext_packs` finds packs by their CRC instead of counting 18 bytes from the header, `parse_cdtext` takes the first language block (ISO 8859-1, ASCII or MS-JIS); `read_cdtext` uses it when libcdio finds nothing. Not checked: whether the drive's firmware does this on every disc type, and why Windows tools read the same discs fine.
+
 ## Data discs
 
 - **Nothing is mounted.** Home Assistant OS's kernel has ISO 9660 but no UDF, and mounting from an add-on needs `SYS_ADMIN` and no AppArmor. `discfs.py` reads ISO 9660 (Joliet, Rock Ridge, multi-extent, multisession) and UDF 1.02–2.60 (plain, sparable, virtual / VAT, metadata partitions) itself, in pure Python, and gives each file's place on the disc. 7-Zip and libcdio's libudf only read plain UDF up to 2.01.

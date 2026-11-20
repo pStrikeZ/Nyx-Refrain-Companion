@@ -571,12 +571,133 @@ def _read_discid():
 CDTEXT_TITLE, CDTEXT_PERFORMER = 0, 1  # cdtext_field_t
 
 
+def _crc16_cdtext(data):
+    """CRC-16 (CCITT, inverted) over the first 16 bytes of a CD-Text pack."""
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc ^ 0xFFFF
+
+
+def cdtext_packs(data):
+    """The CD-Text packs (18 bytes: type, track, sequence, block and position, 12 bytes of
+    text, CRC) in what READ TOC format 5 returned, found by their CRC rather than by
+    counting 18 bytes from the header. A drive may leave 28 bytes of what its buffer held
+    before (the last sectors read) between the header and the first pack, and not count them
+    in the length it gives, so the last of the packs are cut off; libcdio, which counts,
+    then sees garbage."""
+    packs, i = [], 4
+    while i + 18 <= len(data):
+        pack = data[i : i + 18]
+        if 0x80 <= pack[0] <= 0x8F and _crc16_cdtext(pack[:16]) == int.from_bytes(pack[16:], "big"):
+            packs.append(pack)
+            i += 18
+        else:
+            i += 1
+    return packs
+
+
+def parse_cdtext(packs, numbers):
+    """Album / track names out of CD-Text packs, in the shape read_cdtext() returns, or
+    None. Only the first language block is used. Text is ISO 8859-1, ASCII or MS-JIS."""
+    seen, blocks = set(), {}
+    for pack in packs:  # a block is repeated on the disc: keep the first of each sequence
+        block, seq = (pack[3] >> 4) & 7, pack[2]
+        if (block, seq) not in seen:
+            seen.add((block, seq))
+            blocks.setdefault(block, []).append(pack)
+    if not blocks:
+        return None
+    mine = blocks[min(blocks)]
+    mine.sort(key=lambda p: p[2])
+    charset = next((p[4] for p in mine if p[0] == 0x8F and p[1] == 0), 0)
+    encoding = {1: "ascii", 0x80: "cp932"}.get(charset, "latin-1")
+    wide = encoding == "cp932"
+
+    def strings(kind):
+        """{track: text} for one pack type (title 0x80, performer 0x81)."""
+        out, track, buf = {}, None, b""
+        for p in mine:
+            if p[0] != kind:
+                continue
+            if track is None:
+                track = p[1]
+            buf += p[4:16]
+        step = 2 if wide else 1
+        end, start, i = b"\0" * step, 0, 0
+        while i + step <= len(buf):
+            if buf[i : i + step] == end and (not wide or i % 2 == 0):
+                text = buf[start:i]
+                if text == b"\t":  # the same as the one before
+                    out[track] = out.get(track - 1)
+                else:
+                    out[track] = text.decode(encoding, "replace").strip() or None
+                track += 1
+                start = i = i + step
+            else:
+                i += step if wide else 1
+        return out
+
+    titles, performers = strings(0x80), strings(0x81)
+    meta = {
+        "album": titles.get(0),
+        "artist": performers.get(0),
+        "cover_url": None,
+        "tracks": [
+            {"title": titles.get(n), "artist": performers.get(n)} for n in numbers
+        ],
+    }
+    if not meta["album"] and not any(t["title"] for t in meta["tracks"]):
+        return None
+    return meta
+
+
+def _read_cdtext_raw():
+    """READ TOC format 5 (CD-TEXT) over SG_IO: the header and what follows it."""
+    with _held_lock:
+        fd = _drive_fd()
+
+        def toc5(length):
+            buf = (ctypes.c_ubyte * length)()
+            cdb = (ctypes.c_ubyte * 10)(0x43, 0, 5, 0, 0, 0, 0, length >> 8, length & 0xFF, 0)
+            sense = (ctypes.c_ubyte * 32)()
+            hdr = SgIoHdr(
+                interface_id=ord("S"), dxfer_direction=-3, cmd_len=10, mx_sb_len=32,  # FROM_DEV
+                dxfer_len=length, dxferp=ctypes.addressof(buf), cmdp=ctypes.addressof(cdb),
+                sbp=ctypes.addressof(sense), timeout=10000,
+            )
+            fcntl.ioctl(fd, SG_IO, hdr)
+            if hdr.status or hdr.host_status or hdr.driver_status:
+                raise OSError(f"READ TOC (CD-TEXT) failed (status {hdr.status:#x})")
+            return bytes(buf)
+
+        declared = int.from_bytes(toc5(4)[:2], "big") + 2
+        if declared <= 4:
+            return b""
+        return toc5(min(declared, 0xFFFA))[:declared]
+
+
 def read_cdtext(numbers, source=None):
     """Album / track names from the disc's CD-Text, in the same shape as lookup_metadata(),
     or None. Read through libcdio directly: cd-info takes some burned CDs for DVD-ROMs and
-    then skips CD-Text. libcdio converts the text (including MS-JIS) to UTF-8."""
+    then skips CD-Text. libcdio converts the text (including MS-JIS) to UTF-8. If it finds
+    none, the drive is asked itself and the packs picked out by their CRC (see
+    cdtext_packs)."""
     if FAKE_DISC and source is None:
         return None
+    meta = _read_cdtext_libcdio(numbers, source)
+    if meta or source is not None:
+        return meta
+    try:
+        return parse_cdtext(cdtext_packs(_read_cdtext_raw()), numbers)
+    except OSError as e:
+        log.debug("reading CD-Text from the drive failed: %s", e)
+        return None
+
+
+def _read_cdtext_libcdio(numbers, source):
     lib = _libcdio()
     cdio = lib.cdio_open((source or DEVICE).encode(), 0)  # DRIVER_UNKNOWN: autodetect
     if not cdio:

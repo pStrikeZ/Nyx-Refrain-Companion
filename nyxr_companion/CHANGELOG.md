@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.2
+
+- CD: CD-Text is read from drives that put stale bytes between the header and the first pack of READ TOC's answer, which made libcdio find none (a disc with CD-Text then showed `Track01`, `Track02`…).
+
 ## 0.3.1
 
 - Data discs: a folder that holds music only in the folders under it (the disc's top folder, say) is in the *Folder* list too; picking a folder plays it and everything under it.
